@@ -137,17 +137,11 @@ let obsAfter = allAfterMktObs |> Seq.head
 // Types
 type ReturnsWindow = 
     {Transcript : Transcript
-     ReturnsAroundEarnings : ReturnObs []
-     
-        member this.CumulativeReturnn = 
-            this.ReturnsAroundEarnings
-     }
+     ReturnsAroundEarnings : ReturnObs []}
 
 type AnnouncementDayReturn = 
     { Transcript : Transcript
       CumulativeReturn : float}
-
-// (1)
 
 let TwoWeekReturnWindow (obs: Transcript): ReturnsWindow option =
     obs.Ticker
@@ -161,20 +155,19 @@ let TwoWeekReturnWindow (obs: Transcript): ReturnsWindow option =
     | _ -> Some {Transcript = obs
                  ReturnsAroundEarnings = xs}
 
-// (2)
-
-let dayOfEarningsAnnouncement (obs: Transcript): DateTime =
-    let onlyDate = obs.Date
-    if onlyDate.Hour < 16 then onlyDate.Date else onlyDate.Date.AddDays(1.0)
-
 let postEarningsReturn (obs: ReturnsWindow): ReturnObs option =
-    let eaDay = obs.Transcript |> dayOfEarningsAnnouncement
+    let eaDay = if obs.Transcript.Date.Hour < 16 then 
+                    obs.Transcript.Date 
+                else 
+                    obs.Transcript.Date.Date.AddDays(1.0)
 
     obs.ReturnsAroundEarnings 
     |> Seq.tryFind (fun xs -> xs.Date.Date >= eaDay)
 
 let ThreeDayWindow (obs: ReturnsWindow): ReturnObs [] option=
-    let postEarningsReturn = obs |> postEarningsReturn
+    let postEarningsReturn = 
+        obs 
+        |> postEarningsReturn
 
     let filteredObs = 
         obs.ReturnsAroundEarnings
@@ -199,8 +192,6 @@ let ReturnsAroundEarningsAnnouncement (obs: ReturnsWindow option) =
 
         Some {Transcript = retWindow.Transcript
               ReturnsAroundEarnings = retWindow.ReturnsAroundEarnings}
-
-// (3)
 
 let ExcessCumulativeReturnsFromSPY (obs: ReturnObs []) = 
     let adjRet = 
@@ -227,23 +218,30 @@ let AdjustedCumulativeReturns (obs: ReturnsWindow option) =
         Some {Transcript = retWindow.Transcript
               CumulativeReturn = cumRet}
 
-let resultss (obs: Transcript) =
+let getReturnsAroundAnnouncement (obs: Transcript) =
     obs
     |> TwoWeekReturnWindow
     |> ReturnsAroundEarningsAnnouncement
     |> AdjustedCumulativeReturns
 
+
+let t50 = 
+    myTranscripts
+    |> Seq.take 50
+    |> Seq.choose getReturnsAroundAnnouncement
+    |> Seq.toArray
+
 let t1000 = 
     myTranscripts
     |> Seq.take 1000
-    |> Seq.choose resultss
+    |> Seq.choose getReturnsAroundAnnouncement
     |> Seq.toArray
 
 t1000 |> Seq.filter ( fun x-> x.CumulativeReturn >= 0.02) |> Seq.length
 t1000 |> Seq.filter ( fun x-> x.CumulativeReturn <= -0.02) |> Seq.length
 
 let myChart = 
-    let cumRets = t1000 |> Seq.map (fun x -> x.CumulativeReturn)
+    let cumRets = t50 |> Seq.map (fun x -> x.CumulativeReturn)
     cumRets
     |> Chart.Histogram
     |> Chart.withTitle $"(cumulative) adjusted returns around earnings announcements (N: {cumRets |> Seq.length}/500)"
