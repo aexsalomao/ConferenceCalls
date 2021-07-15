@@ -1,3 +1,7 @@
 
 secrets.fsx
 .DS_Store
+
+.fake
+.ionide
+data-cache/
