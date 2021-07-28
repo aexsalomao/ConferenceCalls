@@ -210,8 +210,7 @@ let training =
     |> Seq.filter (fun (l, xs) -> l <> Neutral)
     |> Seq.map (fun (l, xs) -> (l, xs.Transcript.Paragraphs))
     |> Seq.toArray
-
-
+    
 // Word Tokenizer 1
 let matchOnlyWords = Regex(@"\w+")
 

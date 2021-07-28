@@ -18,7 +18,7 @@ Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
-# Read transcripts
+## Writing F# code
 *)
 
 /// Reading JSON
