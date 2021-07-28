@@ -1,4 +1,6 @@
-#r "nuget: FSharp.Data, 4.1.1"
+#r "nuget: FSharp.Data"
+#r "nuget: FSharp.Stats"
+#r "nuget: NodaTime"
 #r "nuget: Newtonsoft.Json, 13.0.1"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
@@ -12,7 +14,7 @@ Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
-# Read JSON
+# Transcripts from Motley Fool
 *)
 
 // Types
@@ -30,7 +32,21 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json") |> Seq.take 250
+let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json") |> Seq.take 1000
+
+(**
+# Stop words
+*)
+
+type StopWordsCsv = CsvProvider<Sample="data-cache/StopWords.csv",
+                                ResolutionFolder= __SOURCE_DIRECTORY__>
+
+let myStopWordsCsv = StopWordsCsv.Load(__SOURCE_DIRECTORY__ + "/data-cache/StopWords.csv")
+
+let stopWordsArr = 
+    myStopWordsCsv.Rows
+    |> Seq.map (fun x -> x.DefaultStopWords)
+    |> Seq.toArray
 
 (**
 # Label type
@@ -155,6 +171,14 @@ let countIn (docs: TokenizedDoc seq) (token: Token) =
     |> Seq.filter (Set.contains token)
     |> Seq.length
 
+
+let countIn2 (docs: TokenizedDoc seq) (token: Token) =
+    let count = 
+        docs
+        |> Seq.filter (Set.contains token)
+        |> Seq.length
+    (token, count)
+
 let analyze (docsThisLabel: TokenizedDoc seq)
             (nTotalDocs: int)
             (vocabulary: Token Set) =
@@ -200,13 +224,13 @@ let vocabulary (tokenizer: Tokenizer) (corpus: string seq) =
     |> Set.unionMany
 
 let validation = 
-    labeledDataset.[..124]
+    labeledDataset.[..499]
     |> Seq.filter (fun (l, xs) -> l <> Neutral)
     |> Seq.map (fun (l, xs) -> (l, xs.Transcript.Paragraphs))
     |> Seq.toArray
 
 let training = 
-    labeledDataset.[125 ..]
+    labeledDataset.[500 ..]
     |> Seq.filter (fun (l, xs) -> l <> Neutral)
     |> Seq.map (fun (l, xs) -> (l, xs.Transcript.Paragraphs))
     |> Seq.toArray
@@ -263,11 +287,11 @@ evaluate wordTokenizerAllWords allTokens
 *)
 
 let top (n: int) (tokenizer: Tokenizer) (docs: string []) = 
-    let tokenized = docs |> Seq.map tokenizer
+    let tokenized = docs |> Array.map tokenizer
     let tokens = tokenized |> Set.unionMany
 
     tokens
-    |> Seq.sortBy (fun t -> countIn tokenized t)
+    |> Seq.sortByDescending (fun t -> countIn tokenized t)
     |> Seq.take n
     |> Set.ofSeq
 
@@ -289,6 +313,9 @@ let negativeCount = allNegativeText |> vocabulary wordTokenizerAllWords |> Set.c
 let topPositiveTokens = allPositiveText |> top (positiveCount / 10) wordTokenizerAllWords
 let topNegativeTokens = allNegativeText |> top (negativeCount / 10) wordTokenizerAllWords
 
+allPositiveText |> top 20 wordTokenizerAllWords |> Seq.iter (printfn "%s")
+allNegativeText |> top 20 wordTokenizerAllWords |> Seq.iter (printfn "%s")
+
 let allTopTokens = Set.union topPositiveTokens topNegativeTokens
 
 // Evaluate using allTopTokens
@@ -308,3 +335,7 @@ let specificTopTokens = Set.difference allTopTokens commonTopTokens
 
 // Evaluate using specificTopTokens
 evaluate wordTokenizerAllWords specificTopTokens
+
+(**
+# Creating new features 
+*)
