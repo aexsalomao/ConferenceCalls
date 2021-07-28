@@ -12,7 +12,6 @@ open Newtonsoft.Json
 open Plotly.NET
 
 open PagePParsing
-open Secrets
 open Common
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
@@ -26,11 +25,10 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<Transcript>>(json)
     
-let allTranscripts = readJson ("data-cache/EarningsCallTest200.json")
+let allTranscripts = readJson ("data-cache/Motley100.json")
 
 (**
 # Tiingo
-
 - Before actually making any Tiingo calls I thought it would be good idea
   to check if they actually support that ticker ...
 *)
@@ -40,8 +38,10 @@ type TiingoSupportedTickersCsv = CsvProvider<Sample="data-cache/SupportedTiingoT
                                            
 let supportedTiingoTickers = TiingoSupportedTickersCsv.GetSample()
 
-// Filtering 'allTranscripts'
+supportedTiingoTickers.Rows
+|> Seq.map (fun x -> x.Exchange)
 
+// Filtering 'allTranscripts'
 type SupportedTicker = {Exchange : string; Ticker : string}
 
 let tiingoTickers = 
@@ -77,7 +77,6 @@ let callsByTimeOfDay =
     |> Chart.withTitle $"Earnings Calls by time of day (N: {myTranscripts |> Seq.length})"
     |> Chart.withX_AxisStyle "Hour"
     |> Chart.withY_AxisStyle "Count"
-    |> Chart.Show
 
 let callsByDay = 
     myTranscripts
@@ -87,7 +86,6 @@ let callsByDay =
     |> Chart.Column
     |> Chart.withTitle $"Earnings Calls by day of week (N: {myTranscripts |> Seq.length})"
     |> Chart.withY_AxisStyle "Count"
-    |> Chart.Show
   
 (**
 # Market returns (SPY)
@@ -108,8 +106,7 @@ let spyReturnsMap =
     |> Map
 
 (**
-# Splitting observations
-
+# Splitting observations
 - Before market close
 - After market close
 *)
@@ -224,26 +221,18 @@ let getReturnsAroundAnnouncement (obs: Transcript) =
     |> ReturnsAroundEarningsAnnouncement
     |> AdjustedCumulativeReturns
 
+myTranscripts |> Seq.length
 
-let t50 = 
+
+(**
+# Download and Export to json
+let t1950 = 
     myTranscripts
-    |> Seq.take 50
+    |> Seq.take 1950
     |> Seq.choose getReturnsAroundAnnouncement
     |> Seq.toArray
-
-let t1000 = 
-    myTranscripts
-    |> Seq.take 1000
-    |> Seq.choose getReturnsAroundAnnouncement
-    |> Seq.toArray
-
-t1000 |> Seq.filter ( fun x-> x.CumulativeReturn >= 0.02) |> Seq.length
-t1000 |> Seq.filter ( fun x-> x.CumulativeReturn <= -0.02) |> Seq.length
-
-let myChart = 
-    let cumRets = t50 |> Seq.map (fun x -> x.CumulativeReturn)
-    cumRets
-    |> Chart.Histogram
-    |> Chart.withTitle $"(cumulative) adjusted returns around earnings announcements (N: {cumRets |> Seq.length}/500)"
-    |> Chart.withSize (750., 500.)
-    |> Chart.Show
+let AnnouncementDayReturnToJson (transcripts: AnnouncementDayReturn [], fileName: string) = 
+    JsonConvert.SerializeObject(transcripts)
+    |> fun json -> IO.File.WriteAllText(fileName, json)
+AnnouncementDayReturnToJson (t1950, "data-cache/AnnouncementDay1950.json")
+*)

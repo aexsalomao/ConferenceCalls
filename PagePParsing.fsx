@@ -93,7 +93,8 @@ let Paragraphs (transcriptDoc: HtmlDocument) =
     transcriptDoc.CssSelect("p")
     |> Seq.map (fun x -> x.InnerText().Trim())
     |> Seq.filter (fun x -> x <> "")
-    |> Seq.toList
+    |> Seq.fold (fun r s -> r + s + " ") ""
+    |> string
 
 (**
 # Transcript Record
@@ -104,7 +105,7 @@ type Transcript =
     {Ticker : string
      Exchange: string
      Date : DateTime
-     Paragraphs : string list}
+     Paragraphs : string}
 
 let MatchTranscript =
     function
@@ -132,6 +133,7 @@ let asyncTranscript (url: string) =
 
 let asyncPage (n: int) = 
     async {
+        printfn $"Page: {n}"
         let papeP = $"https://www.fool.com/earnings-call-transcripts/?page={n}"
         
         let! pageDoc = papeP|> HtmlDocument.AsyncLoad 
@@ -154,24 +156,19 @@ let asyncPage (n: int) =
 # Parse Transcript Pages
 *)
 
-
 (**
-let asyncTest1to300 = 
-    [1 .. 300]
+let asyncTest1to100 = 
+    [1 .. 100]
     |> Seq.map asyncPage
     |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
-
-
-
 let asyncTest = 
     [1 .. 20]
     |> Seq.map asyncPage
     |> Async.Parallel
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
-
 let asyncPagesContent =
     [1 .. 144]
     |> Seq.map asyncPage
@@ -189,26 +186,8 @@ let TranscriptsToJson (transcripts: Transcript [], fileName: string) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (**
-
+TranscriptsToJson (asynchTest1to100, "data-cache/Motley100.json")
 TranscriptsToJson (asyncTest1to300, "data-cache/EarningsCallTest200.json")
-
-
 TranscriptsToJson (asyncTest, "data-cache/EarningsCallTest.json")
-
 TranscriptsToJson (asyncPagesContent, "EarningsTranscripts.json")
 *)
-
-(**
-# Objective: identify good/bad earnings news.
-- First 10 pages (200 calls)
-
-- To-do:
-    - Function to get the Date and time of the earnings call
-    - See 5th paragraph
-*)
-
-
-
-
-
-
