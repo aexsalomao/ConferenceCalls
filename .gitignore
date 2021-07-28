@@ -5,3 +5,6 @@ secrets.fsx
 .fake
 .ionide
 data-cache/
+docs/
+output/
+tmp/
