@@ -1,6 +1,5 @@
 #r "nuget: FSharp.Data"
 #r "nuget: FSharp.Stats"
-#r "nuget: NodaTime"
 #r "nuget: Newtonsoft.Json, 13.0.1"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
@@ -171,14 +170,6 @@ let countIn (docs: TokenizedDoc seq) (token: Token) =
     |> Seq.filter (Set.contains token)
     |> Seq.length
 
-
-let countIn2 (docs: TokenizedDoc seq) (token: Token) =
-    let count = 
-        docs
-        |> Seq.filter (Set.contains token)
-        |> Seq.length
-    (token, count)
-
 let analyze (docsThisLabel: TokenizedDoc seq)
             (nTotalDocs: int)
             (vocabulary: Token Set) =
@@ -253,6 +244,15 @@ let wordTokenizerAllWords (text: string) =
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
 
+// Word Tokenizer 3
+let wordTokenizerStopWords (text: string) = 
+    text
+    |> matchOnlyWords.Matches
+    |> Seq.cast<Match>
+    |> Seq.map (fun m -> m.Value)
+    |> Seq.filter (fun word -> not (stopWordsArr |> Seq.contains(word)))
+    |> Set.ofSeq
+
 // Tokenizer (generic)
 let applyTokenizer (tokenizer: Tokenizer) =
     training
@@ -261,6 +261,11 @@ let applyTokenizer (tokenizer: Tokenizer) =
 
 let allTokensLowerCased = applyTokenizer wordTokenizerAllWordsLowerCased
 let allTokens = applyTokenizer wordTokenizerAllWords
+let tokensWithoutStopWords = applyTokenizer wordTokenizerStopWords
+
+allTokensLowerCased |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
+allTokens |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
+tokensWithoutStopWords |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
 
 (**
 # Evaluate by tokenizer and token set
@@ -272,10 +277,11 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
     validation
     |> Seq.averageBy (fun (label, text) -> 
         if label = classifier text then 1.0 else 0.)
-    |> printfn "Correctly classified: %.3f"
+    |> printfn "Correctly classified: %.10f"
 
 evaluate wordTokenizerAllWordsLowerCased allTokensLowerCased
 evaluate wordTokenizerAllWords allTokens
+evaluate wordTokenizerStopWords tokensWithoutStopWords
 
 (**
 # Less is more
