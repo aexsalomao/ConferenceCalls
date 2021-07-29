@@ -227,10 +227,11 @@ let training, validation = onlyPositiveOrNegative.[.. 799], onlyPositiveOrNegati
 
 // Word Tokenizer 1
 let matchOnlyWords = Regex(@"\w+")
+let matchOnlyWords2 = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
 
 let wordTokenizerAllWordsLowerCased (text: string) = 
     text.ToLowerInvariant()
-    |> matchOnlyWords.Matches
+    |> matchOnlyWords2.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
@@ -238,7 +239,7 @@ let wordTokenizerAllWordsLowerCased (text: string) =
 // Word Tokenizer 2
 let wordTokenizerAllWords (text: string) = 
     text
-    |> matchOnlyWords.Matches
+    |> matchOnlyWords2.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
@@ -246,7 +247,7 @@ let wordTokenizerAllWords (text: string) =
 // Word Tokenizer 3
 let wordTokenizerStopWords (text: string) = 
     text
-    |> matchOnlyWords.Matches
+    |> matchOnlyWords2.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
@@ -270,7 +271,7 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
     |> printfn "Correctly classified: %.4f"
 
 // Evaluate tokenizer 1 -> 0.6732 (Cumulative return threshold -> abs 0.075)
-// Evaluate tokenizer 1 -> 0.7080 (Cumulative return threshold -> abs 0.05)
+// Evaluate tokenizer 1 -> 0.6960 (Cumulative return threshold -> abs 0.05)
 let allTokensLowerCased = applyTokenizer wordTokenizerAllWordsLowerCased
 evaluate wordTokenizerAllWordsLowerCased allTokensLowerCased
 
@@ -322,7 +323,7 @@ let topNegativeTokens = allNegativeText |> top (negativeCount / 10) wordTokenize
 
 let allTopTokens = Set.union topPositiveTokens topNegativeTokens
 
-// Evaluate allTopTokens --> (Seq.sortByDescending) 0.6405
+// Evaluate allTopTokens --> (Seq.sortByDescending) 0.6840
 // Evaluate allTopTokens --> (Seq.sortBy) 0.5882 -> Typo in book ?
 evaluate wordTokenizerStopWords allTopTokens
 
@@ -337,7 +338,7 @@ evaluate wordTokenizerStopWords allTopTokens
 let commonTopTokens = Set.intersect topPositiveTokens topNegativeTokens
 let specificTopTokens = Set.difference allTopTokens commonTopTokens
 
-// Evaluate specificTopTokens --> (Seq.sortByDescending) 0.6536
+// Evaluate specificTopTokens --> (Seq.sortByDescending) 0.6840
 // Evaluate specificTopTokens --> (Seq.sortBy) 0.5817 Typo in book ?
 evaluate wordTokenizerAllWords specificTopTokens
 
@@ -345,7 +346,7 @@ evaluate wordTokenizerAllWords specificTopTokens
 ## N-Grams
 
 - TO-DO: 
-    - Improve regex one word match expression
+    - Improve regex expression
 *)
 
 let woodpecker = 
@@ -380,11 +381,134 @@ let twoGramsTest = woodpecker |> TwoGrams
 // Evaluate TwoGrams -> 0.7080 (Cumulative return threshold -> abs 0.5)
 let twoGrams = applyTokenizer TwoGrams
 
-twoGrams |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
+twoGrams |> Seq.take 100 |> Seq.iter (printfn "%s")
 
 evaluate TwoGrams twoGrams
 
 (**
-## Term frequency - inverse document frequency
+- Machine Learning notes/slides (Sabina)
+
+# Feature Selection
+
+To reduce the number of features to something manageable, a common first step is to strip out elements of the raw text other than words.
+    - Punctuation, numbers, HTML tags, proper names ...
+    - *stop words*: "the", "a", "and", "or" ...
+
+Very rare words do convey meaning, but their added computational cost in expanding 
+the set of features that must be considered often exceeds their diagnostic value.
+
+An approach that excludes both common and rare words and has proven very useful in practice 
+is filtering by "term frequency-inverse document frequency" (tf-idf).
 *)
 
+(**
+**Term frequency (TF)**
+
+Instead of just representing presence or absence of a word, we count words (calculate frequency) in the document.
+
+$tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
+
+$n_{t,d}$ : number of times a term *t* is present in a document *d*.
+*)
+
+
+// Term Frequency (TF)
+let DocTerms (doc: string) = 
+    doc.Split(" ")
+    |> Seq.choose trySingleWordMatch
+    |> Seq.map (fun matchedWord -> matchedWord.Value)
+
+let NumberOfTermsInDoc (docTerms: string []) = 
+    docTerms
+    |> Seq.length
+    |> float
+
+let TermCountInDoc (docTerms: string []) (term: string) = 
+    docTerms
+    |> Seq.filter (fun aTerm -> aTerm = term)
+    |> Seq.length
+    |> float
+
+let TermFrequency (doc: string) (term: string) = 
+    let docTerms = DocTerms doc |> Seq.toArray
+    
+    (TermCountInDoc docTerms term) / (NumberOfTermsInDoc docTerms)
+
+// Sample Document and Term
+let documentD = 
+    training
+    |> Seq.head
+    |> snd
+
+let termT = "the"
+
+// TermFrequency test
+let tfTermT = TermFrequency documentD termT
+
+(**
+**Inverse document frequency (IDF)**
+Term *frequency* measures how prevalent a term is in a single document.
+
+But how common it is in the *entire* corpus we're mining?
+
+- A term should not be too *rare*
+- A term should not be too *common*
+
+The spareness of a term *t* is measured commonly by its **inverse document frequency**:
+
+- $IDF(t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
+
+*)
+
+// Inverse Document Frequency
+let NumberOfDocsWithTerm (term: string) = 
+    training
+    |> Seq.sumBy (fun (_, text) -> if text.Contains(term) then 1. else 0.)
+
+let InverseDocumentFrequency (term: string) = 
+    let documentCount = training |> Seq.length |> float
+    1. + log10 ((documentCount / (NumberOfDocsWithTerm term)))
+
+// Test InverseDocumentFrequency
+let idfTermT = InverseDocumentFrequency termT
+
+(**
+**Term Frequency Inverse document frequency TF-IDF**
+
+TF-IDF value is specific to a single document (*d*) whereas IDF depends on the entire corpus.
+
+$TF-IDF(t, d) = TF(t, d) * IDF(t)$
+
+Each document thus becomes a feature vector, and the corpus is the set of these feature vectors.
+This set can then be used in a data mining algorithm (naive bayes) for classification, clustering, or retrieval.
+
+A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
+the weights hence tend to filter out common terms. =
+
+*)
+
+// Term frequency - inverse document frequency
+let TfIdf (doc: string) (term: string) =
+    (TermFrequency doc term) * (InverseDocumentFrequency term)
+
+// Test TF-IDF
+TfIdf documentD termT
+
+// TF-IDF Type
+type TfIdfByTerm = 
+    {Term : Token
+     TfIdf : float}
+
+let vocabDocumentD = 
+    documentD
+    |> DocTerms
+    |> Set.ofSeq
+
+let analyzeDocumentTerms = 
+    vocabDocumentD
+    |> Seq.map (fun term -> 
+        let tfIdf = TfIdf documentD term
+        
+        { Term = term
+          TfIdf = tfIdf})
+    |> Seq.toArray
