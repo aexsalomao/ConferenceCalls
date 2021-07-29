@@ -156,7 +156,7 @@ let asyncPage (n: int) =
 # Parse Transcript Pages
 *)
 
-(**
+(*
 let asyncTest1to100 = 
     [1 .. 100]
     |> Seq.map asyncPage
@@ -185,7 +185,7 @@ let TranscriptsToJson (transcripts: Transcript [], fileName: string) =
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
-(**
+(*
 TranscriptsToJson (asynchTest1to100, "data-cache/Motley100.json")
 TranscriptsToJson (asyncTest1to300, "data-cache/EarningsCallTest200.json")
 TranscriptsToJson (asyncTest, "data-cache/EarningsCallTest.json")
