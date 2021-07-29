@@ -62,8 +62,8 @@ type DatasetOverview =
  
 let parseLabel (cumRet: float): Label = 
     
-    let positiveThresh = cumRet >= 0.075
-    let negativeThresh = cumRet <= -0.075
+    let positiveThresh = cumRet >= 0.05
+    let negativeThresh = cumRet <= -0.05
     
     match cumRet with
     | _ when positiveThresh  -> Positive
@@ -219,7 +219,7 @@ let onlyPositiveOrNegative =
     |> Seq.toArray
 
 let datasetCount = onlyPositiveOrNegative |> Seq.length
-let training, validation = onlyPositiveOrNegative.[.. 599], onlyPositiveOrNegative.[600 ..]
+let training, validation = onlyPositiveOrNegative.[.. 799], onlyPositiveOrNegative.[800 ..]
 
 (**
 ## Tokenizers
@@ -269,15 +269,18 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
         if label = classifier text then 1.0 else 0.)
     |> printfn "Correctly classified: %.4f"
 
-// Evaluate tokenizer 1 --> 0.6732
+// Evaluate tokenizer 1 -> 0.6732 (Cumulative return threshold -> abs 0.075)
+// Evaluate tokenizer 1 -> 0.7080 (Cumulative return threshold -> abs 0.05)
 let allTokensLowerCased = applyTokenizer wordTokenizerAllWordsLowerCased
 evaluate wordTokenizerAllWordsLowerCased allTokensLowerCased
 
-// Evaluate tokenizer 2 --> 0.6863
+// Evaluate tokenizer 2 -> 0.6863 (Cumulative return threshold -> abs 0.075)
+// Evaluate tokenizer 2 -> 0.6960 (Cumulative return threshold -> abs 0.05)
 let allTokens = applyTokenizer wordTokenizerAllWords
 evaluate wordTokenizerAllWords allTokens
 
-// Evaluate tokenizer 3 --> 0.6863 ??
+// Evaluate tokenizer 3 -> 0.6863 (Cumulative return threshold -> abs 0.075)
+// Evaluate tokenizer 3 -> 0.6920 (Cumulative return threshold -> abs 0.05)
 let tokensWithoutStopWords = applyTokenizer wordTokenizerStopWords
 evaluate wordTokenizerStopWords tokensWithoutStopWords
 
@@ -342,32 +345,46 @@ evaluate wordTokenizerAllWords specificTopTokens
 ## N-Grams
 
 - TO-DO: 
-    - Add StopWords functionality to N-Grams
-    - Some of the grams look wrong, they have double quotation marks 
+    - Improve regex one word match expression
 *)
 
 let woodpecker = 
     "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
 
-let simpleNGrams (n: int) (text: string) = 
+// New Regex Expression
+// (https://stackoverflow.com/questions/62383043/get-only-words-start-and-end-with-either-letters-or-digits-using-regular-express)
+
+let isOnlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
+
+let trySingleWordMatch (word: string) = 
+    word
+    |> isOnlyWords.Matches
+    |> Seq.tryExactlyOne
+
+let completeNGram (n: int) (nGramArr: string []) = 
+    nGramArr
+    |> Seq.choose trySingleWordMatch
+    |> Seq.map (fun matchedWord -> matchedWord.Value)
+    |> fun xs -> if (xs |> Seq.length) = n then Some (xs) else None
+
+let nGrams (n: int) (text: string) = 
     text.Split(" ")
     |> Seq.windowed n
-    |> Seq.map (fun nGramsArr -> 
-                nGramsArr 
-                |> String.concat(" ") 
-                |> fun nGrams -> nGrams.Trim())
+    |> Seq.choose (n |> completeNGram)
+    |> Seq.map (String.concat(" "))
     |> Set.ofSeq
 
-let TwoGramsTokenizer = simpleNGrams 2
-let ThreeGramsTokenizer = simpleNGrams 3
+let TwoGrams = nGrams 2
+let twoGramsTest = woodpecker |> TwoGrams
 
-let twoGramsTest = TwoGramsTokenizer woodpecker
-let threeGramsTest = ThreeGramsTokenizer woodpecker
+// Evaluate TwoGrams -> 0.7080 (Cumulative return threshold -> abs 0.5)
+let twoGrams = applyTokenizer TwoGrams
 
-// Evaluate TwoGramsTokenizer -> 0.6667
-let twoGrams = applyTokenizer TwoGramsTokenizer
-evaluate TwoGramsTokenizer twoGrams
+twoGrams |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
 
-// Evaluate ThreeGramsTokenizer --> Did not eval. :/ 
-let threeGrams = applyTokenizer ThreeGramsTokenizer
-evaluate TwoGramsTokenizer threeGrams
+evaluate TwoGrams twoGrams
+
+(**
+## Term frequency - inverse document frequency
+*)
+
