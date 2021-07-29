@@ -1,5 +1,4 @@
 #r "nuget: FSharp.Data"
-#r "nuget: FSharp.Stats"
 #r "nuget: Newtonsoft.Json, 13.0.1"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
@@ -31,19 +30,18 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json") |> Seq.take 1000
+let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json")
 
 (**
 # Stop words
 *)
 
-type StopWordsCsv = CsvProvider<Sample="data-cache/StopWords.csv",
-                                ResolutionFolder= __SOURCE_DIRECTORY__>
+let [<Literal>] StopWordsFilePath = "C:\Users\Five star\Documents\GitHub\ConferenceCalls\data-cache\StopWords.csv"
+type StopWordsCsv = CsvProvider<StopWordsFilePath>
 
-let myStopWordsCsv = StopWordsCsv.Load(__SOURCE_DIRECTORY__ + "/data-cache/StopWords.csv")
-
-let stopWordsArr = 
-    myStopWordsCsv.Rows
+let stopWordsArr =
+    StopWordsCsv.GetSample()
+    |> fun doc -> doc.Rows
     |> Seq.map (fun x -> x.DefaultStopWords)
     |> Seq.toArray
 
@@ -64,8 +62,8 @@ type DatasetOverview =
  
 let parseLabel (cumRet: float): Label = 
     
-    let positiveThresh = cumRet >= 0.05
-    let negativeThresh = cumRet <= -0.05
+    let positiveThresh = cumRet >= 0.075
+    let negativeThresh = cumRet <= -0.075
     
     match cumRet with
     | _ when positiveThresh  -> Positive
@@ -214,18 +212,19 @@ let vocabulary (tokenizer: Tokenizer) (corpus: string seq) =
     |> Seq.map tokenizer
     |> Set.unionMany
 
-let validation = 
-    labeledDataset.[..499]
-    |> Seq.filter (fun (l, xs) -> l <> Neutral)
+let onlyPositiveOrNegative = 
+    labeledDataset 
+    |> Seq.filter (fun (l, _) -> l <> Neutral)
     |> Seq.map (fun (l, xs) -> (l, xs.Transcript.Paragraphs))
     |> Seq.toArray
 
-let training = 
-    labeledDataset.[500 ..]
-    |> Seq.filter (fun (l, xs) -> l <> Neutral)
-    |> Seq.map (fun (l, xs) -> (l, xs.Transcript.Paragraphs))
-    |> Seq.toArray
-    
+let datasetCount = onlyPositiveOrNegative |> Seq.length
+let training, validation = onlyPositiveOrNegative.[.. 599], onlyPositiveOrNegative.[600 ..]
+
+(**
+## Tokenizers
+*)
+
 // Word Tokenizer 1
 let matchOnlyWords = Regex(@"\w+")
 
@@ -250,44 +249,41 @@ let wordTokenizerStopWords (text: string) =
     |> matchOnlyWords.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
-    |> Seq.filter (fun word -> not (stopWordsArr |> Seq.contains(word)))
     |> Set.ofSeq
+    |> Set.filter (fun text -> not (stopWordsArr |> Array.contains text))
 
-// Tokenizer (generic)
+// Apply (generic) tokenizer
 let applyTokenizer (tokenizer: Tokenizer) =
     training
     |> Seq.map snd
     |> vocabulary tokenizer
 
-let allTokensLowerCased = applyTokenizer wordTokenizerAllWordsLowerCased
-let allTokens = applyTokenizer wordTokenizerAllWords
-let tokensWithoutStopWords = applyTokenizer wordTokenizerStopWords
-
-allTokensLowerCased |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
-allTokens |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
-tokensWithoutStopWords |> Seq.rev |> Seq.take 100 |> Seq.iter (printfn "%s")
-
 (**
-# Evaluate by tokenizer and token set
+# Evaluate by tokenizer and token set
 *)
 
 let evaluate (tokenizer: Tokenizer) (tokens: Token Set) = 
-    
     let classifier = train training tokenizer tokens
     validation
     |> Seq.averageBy (fun (label, text) -> 
         if label = classifier text then 1.0 else 0.)
-    |> printfn "Correctly classified: %.10f"
+    |> printfn "Correctly classified: %.4f"
 
+// Evaluate tokenizer 1 --> 0.6732
+let allTokensLowerCased = applyTokenizer wordTokenizerAllWordsLowerCased
 evaluate wordTokenizerAllWordsLowerCased allTokensLowerCased
+
+// Evaluate tokenizer 2 --> 0.6863
+let allTokens = applyTokenizer wordTokenizerAllWords
 evaluate wordTokenizerAllWords allTokens
+
+// Evaluate tokenizer 3 --> 0.6863 ??
+let tokensWithoutStopWords = applyTokenizer wordTokenizerStopWords
 evaluate wordTokenizerStopWords tokensWithoutStopWords
 
 (**
 # Less is more
-
 - Picking the most frequently found tokens in each document group
-
 - Extract and count how many tokens we have in each group (Vocabulary; set)
 - Merge them into one single set.
 *)
@@ -313,23 +309,22 @@ let allNegativeText =
     |> Seq.map (fun (_, txt) -> txt)
     |> Seq.toArray
 
-let positiveCount = allPositiveText |> vocabulary wordTokenizerAllWords |> Set.count
-let negativeCount = allNegativeText |> vocabulary wordTokenizerAllWords |> Set.count
+// WITHOUT StopWords ! --> Since we are already filtering out for the stop words, we are really getting the top common words that are not stop words.
 
-let topPositiveTokens = allPositiveText |> top (positiveCount / 10) wordTokenizerAllWords
-let topNegativeTokens = allNegativeText |> top (negativeCount / 10) wordTokenizerAllWords
+let positiveCount = allPositiveText |> vocabulary wordTokenizerStopWords |> Set.count
+let negativeCount = allNegativeText |> vocabulary wordTokenizerStopWords |> Set.count
 
-allPositiveText |> top 20 wordTokenizerAllWords |> Seq.iter (printfn "%s")
-allNegativeText |> top 20 wordTokenizerAllWords |> Seq.iter (printfn "%s")
+let topPositiveTokens = allPositiveText |> top (positiveCount / 10) wordTokenizerStopWords
+let topNegativeTokens = allNegativeText |> top (negativeCount / 10) wordTokenizerStopWords
 
 let allTopTokens = Set.union topPositiveTokens topNegativeTokens
 
-// Evaluate using allTopTokens
-evaluate wordTokenizerAllWords allTopTokens
+// Evaluate allTopTokens --> (Seq.sortByDescending) 0.6405
+// Evaluate allTopTokens --> (Seq.sortBy) 0.5882 -> Typo in book ?
+evaluate wordTokenizerStopWords allTopTokens
 
 (**
 # Choosing our words more carefully 
-
 - Removing stop words
 - Instead of relying on a list of stop words, we can assume that most stop words can be found in the intersection between the two sets.
 - By keeping only Positive and Negative specific words we should get superior results.
@@ -339,9 +334,40 @@ evaluate wordTokenizerAllWords allTopTokens
 let commonTopTokens = Set.intersect topPositiveTokens topNegativeTokens
 let specificTopTokens = Set.difference allTopTokens commonTopTokens
 
-// Evaluate using specificTopTokens
+// Evaluate specificTopTokens --> (Seq.sortByDescending) 0.6536
+// Evaluate specificTopTokens --> (Seq.sortBy) 0.5817 Typo in book ?
 evaluate wordTokenizerAllWords specificTopTokens
 
 (**
-# Creating new features 
+## N-Grams
+
+- TO-DO: 
+    - Add StopWords functionality to N-Grams
+    - Some of the grams look wrong, they have double quotation marks 
 *)
+
+let woodpecker = 
+    "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
+
+let simpleNGrams (n: int) (text: string) = 
+    text.Split(" ")
+    |> Seq.windowed n
+    |> Seq.map (fun nGramsArr -> 
+                nGramsArr 
+                |> String.concat(" ") 
+                |> fun nGrams -> nGrams.Trim())
+    |> Set.ofSeq
+
+let TwoGramsTokenizer = simpleNGrams 2
+let ThreeGramsTokenizer = simpleNGrams 3
+
+let twoGramsTest = TwoGramsTokenizer woodpecker
+let threeGramsTest = ThreeGramsTokenizer woodpecker
+
+// Evaluate TwoGramsTokenizer -> 0.6667
+let twoGrams = applyTokenizer TwoGramsTokenizer
+evaluate TwoGramsTokenizer twoGrams
+
+// Evaluate ThreeGramsTokenizer --> Did not eval. :/ 
+let threeGrams = applyTokenizer ThreeGramsTokenizer
+evaluate TwoGramsTokenizer threeGrams
