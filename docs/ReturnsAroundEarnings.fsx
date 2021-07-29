@@ -228,7 +228,10 @@ myTranscripts |> Seq.length
 
 
 (**
-# Download and Export to json
+# Download and Export to Json
+*)
+
+(*
 let t1950 = 
     myTranscripts
     |> Seq.take 1950
