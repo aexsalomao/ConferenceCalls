@@ -6,6 +6,5 @@ secrets.fsx
 .ionide
 .fsdocs
 data-cache/
-docs/
 output/
 tmp/
