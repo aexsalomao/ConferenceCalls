@@ -15,14 +15,19 @@ open Newtonsoft.Json
 open System
 
 (**
-## Generic Url - Transcript
+## Transcript - Url
 - In order to download or parse individual transcripts, we first need to find a way to fetch individual transcript urls. 
-Fortunately, we can fetch multiple transcript urls from [motley fool's front page]("https://www.fool.com/earnings-call-transcripts/?page=1") 
-using the `CssSelect` method from FSharp Data. 
-Since the transcripts are tagged with a specific hypertext referece (href) (`"/earnings/call-transcripts"`), 
-we can use the `CssSelect` method to find all elements in a given front page that match the transcript href that we are looking for.
+Fortunately, we can fetch multiple transcript urls from [motley fool's front page]("https://www.fool.com/earnings-call-transcripts/?page=1") using the `CssSelect` method from FSharp Data. 
+*)
 
-- After fetching the individual urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
+(**
+<img src="Images\motley_fool_front_page.png" width="533" height="366">
+*)
+
+(**
+- Since the transcripts are tagged with a specific hypertext referece (href) (`"/earnings/call-transcripts"`), 
+we can use the `CssSelect` method to find all elements in a given front page that match the transcript href that we are looking for. 
+After fetching the individual urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
 *)
 
 type FrontPageDocument = HtmlDocument
@@ -74,10 +79,12 @@ let FindTickerExchange (doc: TranscriptDocument): option<string * string> =
     |> Seq.tryExactlyOne
     |> TryTickerExchange
 
-(** 
-Lets see if we can fetch Tesla's ticker and exchange from its [lastest earnings call](https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/): 
-![GitHub Logo](/ScreenCaptures/tesla_motley_fool.jpeg)
+(**
+Lets see if we can fetch Tesla's ticker and exchange from its <a href="https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/" target="_blank">latest earnings call</a>
+*)
 
+(**
+<img src="Images\tesla_motley_fool.png" width="533" height="366">
 *) 
 
 let teslaTranscriptUrl = "https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/"
