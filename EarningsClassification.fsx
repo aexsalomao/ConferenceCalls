@@ -30,11 +30,10 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json")
+let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json") |> Seq.take 500
 
 (**
 # Stop words
-*)
 
 let [<Literal>] StopWordsFilePath = "C:\Users\Five star\Documents\GitHub\ConferenceCalls\data-cache\StopWords.csv"
 type StopWordsCsv = CsvProvider<StopWordsFilePath>
@@ -42,6 +41,17 @@ type StopWordsCsv = CsvProvider<StopWordsFilePath>
 let stopWordsArr =
     StopWordsCsv.GetSample()
     |> fun doc -> doc.Rows
+    |> Seq.map (fun x -> x.DefaultStopWords)
+    |> Seq.toArray
+*)
+
+type StopWordsCsv = CsvProvider<Sample="data-cache/StopWords.csv",
+                                ResolutionFolder= __SOURCE_DIRECTORY__>
+
+let myStopWordsCsv = StopWordsCsv.Load(__SOURCE_DIRECTORY__ + "/data-cache/StopWords.csv")
+
+let stopWordsArr = 
+    myStopWordsCsv.Rows
     |> Seq.map (fun x -> x.DefaultStopWords)
     |> Seq.toArray
 
@@ -219,7 +229,7 @@ let onlyPositiveOrNegative =
     |> Seq.toArray
 
 let datasetCount = onlyPositiveOrNegative |> Seq.length
-let training, validation = onlyPositiveOrNegative.[.. 799], onlyPositiveOrNegative.[800 ..]
+let training, validation = onlyPositiveOrNegative.[.. 129], onlyPositiveOrNegative.[130 ..]
 
 (**
 ## Tokenizers
@@ -483,7 +493,7 @@ Each document thus becomes a feature vector, and the corpus is the set of these 
 This set can then be used in a data mining algorithm (naive bayes) for classification, clustering, or retrieval.
 
 A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
-the weights hence tend to filter out common terms. =
+the weights hence tend to filter out common terms.
 
 *)
 
@@ -494,21 +504,37 @@ let TfIdf (doc: string) (term: string) =
 // Test TF-IDF
 TfIdf documentD termT
 
-// TF-IDF Type
+// TF-IDF Type ("Feature vector")
 type TfIdfByTerm = 
     {Term : Token
      TfIdf : float}
 
-let vocabDocumentD = 
-    documentD
+let TfIdfByDoc (doc: string)=
+    doc
     |> DocTerms
     |> Set.ofSeq
-
-let analyzeDocumentTerms = 
-    vocabDocumentD
     |> Seq.map (fun term -> 
         let tfIdf = TfIdf documentD term
-        
         { Term = term
           TfIdf = tfIdf})
     |> Seq.toArray
+
+// TfIdfByDoc test
+let documentDFeatures = TfIdfByDoc documentD
+
+let commonTerms = documentDFeatures |> Seq.sortByDescending (fun xs -> xs.TfIdf) |> Seq.take 30 |> Seq.toArray
+let rareTerms = documentDFeatures |> Seq.sortBy (fun xs -> xs.TfIdf) |> Seq.take 30 |> Seq.toArray
+
+let wordBarChart (terms: TfIdfByTerm []) (title: string) = 
+    terms
+    |> Seq.map (fun xs -> xs.Term, xs.TfIdf)
+    |> Chart.Bar
+    |> Chart.withTitle title
+    |> Chart.withX_AxisStyle "Term Frequency - Inverse Document Frequency"
+
+wordBarChart commonTerms "Common Terms" |> Chart.Show
+wordBarChart rareTerms "Rare terms" |> Chart.Show
+
+
+
+
