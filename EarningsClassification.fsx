@@ -239,6 +239,10 @@ let training, validation = onlyPositiveOrNegative.[.. 129], onlyPositiveOrNegati
 let matchOnlyWords = Regex(@"\w+")
 let matchOnlyWords2 = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
 
+let a = 
+    let somePhrase = "I like to test this function"
+    somePhrase |> matchOnlyWords.Matches |> Seq.cast<Match> |> Seq.map (fun x -> x.Value) |> Seq.toArray
+
 let wordTokenizerAllWordsLowerCased (text: string) = 
     text.ToLowerInvariant()
     |> matchOnlyWords2.Matches
@@ -536,5 +540,15 @@ wordBarChart commonTerms "Common Terms" |> Chart.Show
 wordBarChart rareTerms "Rare terms" |> Chart.Show
 
 
+(**
+# To-do
+- Combine TfIdf with some tokenizer
+- Build Porters algorithm ? 
 
+- Pipeline:
+    1. Training data
+    2. bi-grams (with regex)
+    3. (Porters algorithm ?)
+    4. TfIdf filter (threshold -> hyperparameter ?)
 
+*)

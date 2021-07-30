@@ -161,7 +161,7 @@ let postEarningsReturn (obs: ReturnsWindow): ReturnObs option =
     obs.ReturnsAroundEarnings 
     |> Seq.tryFind (fun xs -> xs.Date.Date >= eaDay)
 
-let ThreeDayWindow (obs: ReturnsWindow): ReturnObs [] option=
+let ThreeDayWindow (obs: ReturnsWindow): ReturnObs [] option =
     let postEarningsReturn = 
         obs 
         |> postEarningsReturn
