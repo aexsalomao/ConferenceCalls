@@ -1,53 +1,86 @@
-#r "nuget: FSharp.Data, 4.1.1"
+(**
+## Parsing Motley Fool
+
+- The objective of this .fsx script is to give a few examples on how to parse html documents with F#.
+- More specifically, we will be concerned with parsing earnings announcements transcripts from Motley Fool (insert link here).
+*)
+
+#r "nuget: FSharp.Data "
 #r "nuget: Newtonsoft.Json, 13.0.1"
 
 open FSharp.Data
 open Newtonsoft.Json
 open System
-open System.Globalization
-open System.Xml
 
 (**
-# Generic Page - Urls
+## Generic Url - Transcript
+
+- Before parsing individual transcripts, we first need to find a way to find the actual transcript urls. 
+Fortunately, we can fetch individual transcript urls from motley fool's front page .
+
+- Example front page: "https://www.fool.com/earnings-call-transcripts/?page=1"
 *)
 
-let tryHref (node: HtmlNode) =
-    let urlHome = "https://www.fool.com"
-    node.TryGetAttribute("href")
-    |> Option.map (fun x -> urlHome + x.Value())
+let tryWithHref (node: HtmlNode): string option =
+    match node.TryGetAttribute("href") with
+    | None -> None
+    | Some attrib -> Some ("https://www.fool.com" + attrib.Value())
 
-let TranscriptUrls (pageDoc: HtmlDocument): string list= 
+let FindTranscriptUrls (pageDoc: HtmlDocument): string list = 
     pageDoc.CssSelect("a[href^='/earnings/call-transcripts']")
-    |> Seq.choose tryHref
+    |> Seq.choose tryWithHref
     |> Seq.toList
 
+(** Lets take a look at the first 5 urls *)
+let exampleFrontPage = "https://www.fool.com/earnings-call-transcripts/?page=1"
+
+let fiveTranscriptUrls: string list = 
+    exampleFrontPage
+    |> HtmlDocument.Load 
+    |> FindTranscriptUrls
+    |> List.take 5
+
+// (*** include-fsi-output ***)
+fiveTranscriptUrls 
+|> List.iter (printfn "%s")
+
 (**
-# Generic Transcript - Ticker
+## Generic Transcript - Ticker & Exchange
+
+- Now that we have our transcript urls we can simply use the same `HtmlDocument.Load` method on all urls.
+- We can now use the `CssSelect` method to search for key information like a company's ticker and exchange. 
+Since we'll use this information later on, it is best if we place this information into a `TickerExchange` reccord.
 *)
 
-type CssTickerInfo = 
-    {CssTicker : string
-     CssExchange: string}
+type TickerExchange = 
+    { Ticker : string
+      Exchange : string}
 
-let tickerExchangeTuple (tickerInfo: string option)=
-    tickerInfo
-    |> function
-    | Some te -> te.Split(":") 
-                 |> function
-                 | [|exchange; ticker|] -> Some ({CssTicker = ticker
-                                                  CssExchange = exchange})
+(** Since we are not certain that we'll retrieve a ticker and exchange from *every* single transcript (html document), 
+we can choose to only save those reccords that contain both a ticker and exchange.
+This sounds like a task for match expressions and option types. *)
+
+let tryFindTickerExchange (tickerInfo: string option): TickerExchange option =
+    match tickerInfo with
+    | Some te -> match te.Split(":") with
+                 |[|exchange; ticker|] -> Some ({ Ticker = ticker
+                                                  Exchange = exchange})
                  | _ -> None
     | _ -> None
 
-let TickerAndExchange (transcriptDoc: HtmlDocument) = 
+let FindTickerExchange (transcriptDoc: HtmlDocument) = 
     transcriptDoc.CssSelect("span[class='ticker']")
     |> Seq.map (fun x -> x.InnerText().Trim())
     |> Seq.filter (fun x -> not (x.Contains("(")))
     |> Seq.tryExactlyOne
-    |> tickerExchangeTuple
+    |> tryFindTickerExchange
+
+(** Lets see if we manage to fetch the ticker and exchange of our first transcript **) 
+
+(** We can then place that information inside a reccord*)
 
 (**
-# Generic Transcript - Date, Time
+# Generic Transcript - Date & Time
 *)
 
 // Date
@@ -109,7 +142,7 @@ type Transcript =
 
 let MatchTranscript =
     function
-    | Some {CssTicker = ticker; CssExchange = exchange}, Some date, paragraphs -> Some { Ticker = ticker
+    | Some {Ticker = ticker; CssExchange = exchange}, Some date, paragraphs -> Some { Ticker = ticker
                                                                                          Exchange = exchange
                                                                                          Date = date
                                                                                          Paragraphs = paragraphs}
