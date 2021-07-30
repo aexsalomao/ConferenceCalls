@@ -1,11 +1,13 @@
 (**
-## Parsing Motley Fool
+# Parsing Motley Fool
+- The objective of this .fsx script to give a few examples on how to parse html documents with F#. More specifically, 
+we will be concerned with parsing earnings calls transcripts from [Motley Fool](https://www.fool.com/earnings-call-transcripts/).
 
-- The objective of this .fsx script is to give a few examples on how to parse html documents with F#.
-- More specifically, we will be concerned with parsing earnings announcements transcripts from Motley Fool (insert link here).
+- Before getting started, lets download the [FSharp Data](https://fsprojects.github.io/FSharp.Data/) package
+using .NET's package manager [NuGet](https://www.nuget.org/):
 *)
 
-#r "nuget: FSharp.Data "
+#r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json, 13.0.1"
 
 open FSharp.Data
@@ -14,124 +16,162 @@ open System
 
 (**
 ## Generic Url - Transcript
+- In order to download or parse individual transcripts, we first need to find a way to fetch individual transcript urls. 
+Fortunately, we can fetch multiple transcript urls from [motley fool's front page]("https://www.fool.com/earnings-call-transcripts/?page=1") 
+using the `CssSelect` method from FSharp Data. 
+Since the transcripts are tagged with a specific hypertext referece (href) (`"/earnings/call-transcripts"`), 
+we can use the `CssSelect` method to find all elements in a given front page that match the transcript href that we are looking for.
 
-- Before parsing individual transcripts, we first need to find a way to find the actual transcript urls. 
-Fortunately, we can fetch individual transcript urls from motley fool's front page .
-
-- Example front page: "https://www.fool.com/earnings-call-transcripts/?page=1"
+- After fetching the individual urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
 *)
 
-let tryWithHref (node: HtmlNode): string option =
+type FrontPageDocument = HtmlDocument
+
+let TryHref (node: HtmlNode): string option =
     match node.TryGetAttribute("href") with
     | None -> None
     | Some attrib -> Some ("https://www.fool.com" + attrib.Value())
 
-let FindTranscriptUrls (pageDoc: HtmlDocument): string list = 
+let FindTranscriptUrls (pageDoc: FrontPageDocument): seq<string> = 
     pageDoc.CssSelect("a[href^='/earnings/call-transcripts']")
-    |> Seq.choose tryWithHref
-    |> Seq.toList
-
-(** Lets take a look at the first 5 urls *)
-let exampleFrontPage = "https://www.fool.com/earnings-call-transcripts/?page=1"
-
-let fiveTranscriptUrls: string list = 
-    exampleFrontPage
-    |> HtmlDocument.Load 
-    |> FindTranscriptUrls
-    |> List.take 5
-
-// (*** include-fsi-output ***)
-fiveTranscriptUrls 
-|> List.iter (printfn "%s")
-
-(**
-## Generic Transcript - Ticker & Exchange
-
-- Now that we have our transcript urls we can simply use the same `HtmlDocument.Load` method on all urls.
-- We can now use the `CssSelect` method to search for key information like a company's ticker and exchange. 
-Since we'll use this information later on, it is best if we place this information into a `TickerExchange` reccord.
+    |> Seq.choose TryHref
+    
+(** 
+Lets take a look at the first three call transcript urls `CssSelect` was able to match:
 *)
 
-type TickerExchange = 
-    { Ticker : string
-      Exchange : string}
+let exampleFrontPage = "https://www.fool.com/earnings-call-transcripts/?page=1"
 
-(** Since we are not certain that we'll retrieve a ticker and exchange from *every* single transcript (html document), 
-we can choose to only save those reccords that contain both a ticker and exchange.
-This sounds like a task for match expressions and option types. *)
+// (*** include-fsi-output ***)
+exampleFrontPage
+|> HtmlDocument.Load 
+|> FindTranscriptUrls
+|> Seq.take 3
+|> Seq.iter (printfn "%s")
 
-let tryFindTickerExchange (tickerInfo: string option): TickerExchange option =
+(**
+## Transcript - Ticker & Exchange
+- Apart from using the `CssSelect` method to search for transcript urls we can also use it to extract other key information like a company's ticker and/or exchange. 
+
+- Since we are not certain that we'll retrieve both a ticker and an exchange from *every* single transcript we parse, 
+we can use match expressions to make sure to return only those matches that contain both a valid ticker and exchange. 
+*)
+
+type TranscriptDocument = HtmlDocument
+
+let TryTickerExchange (tickerInfo: string option): option<string * string> =
     match tickerInfo with
-    | Some te -> match te.Split(":") with
-                 |[|exchange; ticker|] -> Some ({ Ticker = ticker
-                                                  Exchange = exchange})
+    | Some te -> 
+                 match te.Split(":") with
+                 |[|exchange; ticker|] -> Some (ticker, exchange)
                  | _ -> None
     | _ -> None
 
-let FindTickerExchange (transcriptDoc: HtmlDocument) = 
-    transcriptDoc.CssSelect("span[class='ticker']")
+let FindTickerExchange (doc: TranscriptDocument): option<string * string> = 
+    doc.CssSelect("span[class='ticker']")
     |> Seq.map (fun x -> x.InnerText().Trim())
     |> Seq.filter (fun x -> not (x.Contains("(")))
     |> Seq.tryExactlyOne
-    |> tryFindTickerExchange
+    |> TryTickerExchange
 
-(** Lets see if we manage to fetch the ticker and exchange of our first transcript **) 
+(** 
+Lets see if we can fetch Tesla's ticker and exchange from its [lastest earnings call](https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/): 
+![GitHub Logo](/ScreenCaptures/tesla_motley_fool.jpeg)
 
-(** We can then place that information inside a reccord*)
+*) 
+
+let teslaTranscriptUrl = "https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/"
+
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> FindTickerExchange
 
 (**
-# Generic Transcript - Date & Time
+## Transcript - Date
 *)
 
 // Date
-let cleanDate (node: HtmlNode) =
+let CleanDate (node: HtmlNode): option<string> = 
     let dateSplit = node.InnerText().ToUpperInvariant().Replace(".", "").Replace(",", "").Trim().Split(" ")
     match dateSplit with
     |[|month; day; year|] -> Some ($"{month.[..2]} {day} {year}") 
     | _ -> None
 
-let TranscriptDate (transcriptDoc: HtmlDocument) =
-    transcriptDoc.CssSelect("span[id='date']")
-    |> Seq.choose cleanDate
+let TryDate (node: HtmlNode option): option<string> =
+    match node with
+    | None -> None 
+    | Some dateNode -> 
+        let cleanDate = (dateNode |> CleanDate)
+        if cleanDate.IsSome then Some (cleanDate.Value) else None
+
+let FindDate (doc: TranscriptDocument): option<string>=
+    doc.CssSelect("span[id='date']")
     |> Seq.tryExactlyOne
+    |> TryDate
+
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> FindDate
+
+(**
+## Transcript - Time
+*)
 
 // Time
-let cleanTime (node: HtmlNode) =
+let CleanTime (node: HtmlNode ) = 
     node.InnerText().ToUpperInvariant().Replace(".", "").Replace("ET", "").Trim()
 
-let TranscriptTime (transcriptDoc: HtmlDocument) =
-    transcriptDoc.CssSelect("em[id='time']")
-    |> Seq.map cleanTime
+let TryTime (node: HtmlNode option): option<string> =
+    match node with
+    | None -> None
+    | Some timeNode -> Some (timeNode |> CleanTime)
+
+let FindTime (doc: TranscriptDocument) =
+    doc.CssSelect("em[id='time']")
     |> Seq.tryExactlyOne
+    |> TryTime
+
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> FindTime
+
+(**
+## Transcript - Datetime
+*)
 
 // DateTime
-let exprToDateTime (dateExpr: string) =
+let ConvertToDatetime (dateExpr: string): DateTime =
     let dateFormat = "MMM d yyyy h:mm tt"
     DateTime.ParseExact(dateExpr, dateFormat, System.Globalization.CultureInfo.CurrentCulture)
 
-let TranscriptDateTime (doc: HtmlDocument) =
-    let timeT = doc |> TranscriptTime 
-    let dateT = doc |> TranscriptDate
-    
-    (dateT, timeT)
-    |> function
-    | Some d, Some t -> Some ($"{d} {t}" |> exprToDateTime) 
+let FindDateTime (doc: HtmlDocument): option<DateTime> =
+    match (doc |> FindDate), (doc |> FindTime) with
+    | Some date, Some time -> Some ($"{date} {time}" |> ConvertToDatetime) 
     | _ -> None
 
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> FindDateTime
+
 (**
-# Generic Transcript - Paragraphs
+# Transcript - Paragraphs
 *)
 
-let Paragraphs (transcriptDoc: HtmlDocument) = 
+let FindParagraphs (transcriptDoc: HtmlDocument) = 
     transcriptDoc.CssSelect("p")
     |> Seq.map (fun x -> x.InnerText().Trim())
     |> Seq.filter (fun x -> x <> "")
-    |> Seq.fold (fun r s -> r + s + " ") ""
-    |> string
+    |> String.concat(" ")
+
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> FindParagraphs
 
 (**
 # Transcript Record
-- Adding more structure ...
+- So far we have worked with individual functions that take in one single argument, an html transcript document. 
+Since they all work with the `TranscriptDocument` type, we can easily combine these functions together to form one 
+single function that returns all the individuals groups of data that we want.
 *)
 
 type Transcript = 
@@ -140,40 +180,39 @@ type Transcript =
      Date : DateTime
      Paragraphs : string}
 
-let MatchTranscript =
-    function
-    | Some {Ticker = ticker; CssExchange = exchange}, Some date, paragraphs -> Some { Ticker = ticker
-                                                                                         Exchange = exchange
-                                                                                         Date = date
-                                                                                         Paragraphs = paragraphs}
+let ParseTrancriptDocument (doc: TranscriptDocument): option<Transcript> =
+    let matchExpr =  (doc |> FindTickerExchange), (doc |> FindDateTime), (doc |> FindParagraphs)      
+    
+    match matchExpr with
+    | Some (ticker, exchange), Some date, paragraphs -> Some { Ticker = ticker
+                                                               Exchange = exchange
+                                                               Date = date
+                                                               Paragraphs = paragraphs}
     | _ -> None
 
-let parseTrancript (transcript: HtmlDocument) = 
-    
-    let tickerAndExchange = transcript |> TickerAndExchange
-    let period = transcript |> TranscriptDateTime
-    let paragraphs = transcript |> Paragraphs
-    
-    (tickerAndExchange, period, paragraphs) 
-    |> MatchTranscript
+teslaTranscriptUrl
+|> HtmlDocument.Load
+|> ParseTrancriptDocument
+
+(**
+## Async methods
+*)
 
 let asyncTranscript (url: string) = 
     async {
-        let! doc = url |> HtmlDocument.AsyncLoad
-        let content = doc |> parseTrancript
-        return content
+        let! transcriptDocument = url |> HtmlDocument.AsyncLoad
+        let transcriptInfo = transcriptDocument |> ParseTrancriptDocument
+        return transcriptInfo
         }
 
 let asyncPage (n: int) = 
     async {
-        printfn $"Page: {n}"
-        let papeP = $"https://www.fool.com/earnings-call-transcripts/?page={n}"
-        
-        let! pageDoc = papeP|> HtmlDocument.AsyncLoad 
+        let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}" 
+        let! pageDoc = frontPageP |> HtmlDocument.AsyncLoad 
 
         let transcripts = 
             pageDoc 
-            |> TranscriptUrls 
+            |> FindTranscriptUrls 
             |> Seq.map asyncTranscript 
             |> fun xs -> Async.Parallel(xs, 5)
             |> Async.RunSynchronously
@@ -189,27 +228,17 @@ let asyncPage (n: int) =
 # Parse Transcript Pages
 *)
 
-(*
-let asyncTest1to100 = 
-    [1 .. 100]
+let asyncTest1to10 = 
+    [1 .. 10]
     |> Seq.map asyncPage
     |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
-let asyncTest = 
-    [1 .. 20]
-    |> Seq.map asyncPage
-    |> Async.Parallel
-    |> Async.RunSynchronously
-    |> Array.collect Seq.toArray
-let asyncPagesContent =
-    [1 .. 144]
-    |> Seq.map asyncPage
-    |> Async.Parallel
-    |> Async.RunSynchronously
-    |> Array.collect Seq.toArray
-*)
 
+asyncTest1to10
+|> Seq.take 3
+|> Seq.iter (fun transcript -> 
+    printfn $" Datetime: {transcript.Date} --- Ticker and Exchange: {transcript.Ticker}, {transcript.Exchange} --- Paragraps: {transcript.Paragraphs.[377 .. 430]}")
 (**
 # Export to json
 *)
