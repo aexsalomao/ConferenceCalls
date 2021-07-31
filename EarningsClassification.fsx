@@ -1,12 +1,17 @@
 #r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json, 13.0.1"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
+#r "nuget: FSharp.Collections.ParallelSeq"
+
+#load "PagePParsing.fsx"
+open PagePParsing
 
 open System
 open System.Text.RegularExpressions
 open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
+open FSharp.Collections.ParallelSeq
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
@@ -16,12 +21,6 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 *)
 
 // Types
-type Transcript = 
-    {Ticker : string
-     Exchange: string
-     Date : DateTime
-     Paragraphs : string}
-
 type AnnouncementDayReturn = 
     { Transcript : Transcript
       CumulativeReturn : float}
@@ -30,20 +29,10 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json") |> Seq.take 500
+let datasetRaw = readJson ("data-cache/AnnouncementDay1950.json")
 
 (**
 # Stop words
-
-let [<Literal>] StopWordsFilePath = "C:\Users\Five star\Documents\GitHub\ConferenceCalls\data-cache\StopWords.csv"
-type StopWordsCsv = CsvProvider<StopWordsFilePath>
-
-let stopWordsArr =
-    StopWordsCsv.GetSample()
-    |> fun doc -> doc.Rows
-    |> Seq.map (fun x -> x.DefaultStopWords)
-    |> Seq.toArray
-*)
 
 type StopWordsCsv = CsvProvider<Sample="data-cache/StopWords.csv",
                                 ResolutionFolder= __SOURCE_DIRECTORY__>
@@ -52,6 +41,16 @@ let myStopWordsCsv = StopWordsCsv.Load(__SOURCE_DIRECTORY__ + "/data-cache/StopW
 
 let stopWordsArr = 
     myStopWordsCsv.Rows
+    |> Seq.map (fun x -> x.DefaultStopWords)
+    |> Seq.toArray
+*)
+
+let [<Literal>] StopWordsFilePath = "C:\Users\Five star\Documents\GitHub\ConferenceCalls\data-cache\StopWords.csv"
+type StopWordsCsv = CsvProvider<StopWordsFilePath>
+
+let stopWordsArr =
+    StopWordsCsv.GetSample()
+    |> fun doc -> doc.Rows
     |> Seq.map (fun x -> x.DefaultStopWords)
     |> Seq.toArray
 
@@ -63,22 +62,21 @@ type Label =
     | Positive
     | Negative
     | Neutral
-    
+
 type DatasetOverview = 
     { LabelCount : (Label * int)[]
       PositiveAvg : float
       NegativeAvg : float
       NeutralAvg : float}
- 
+
 let parseLabel (cumRet: float): Label = 
-    
-    let positiveThresh = cumRet >= 0.05
-    let negativeThresh = cumRet <= -0.05
-    
-    match cumRet with
-    | _ when positiveThresh  -> Positive
-    | _ when negativeThresh -> Negative
-    | _ -> Neutral
+    let threshold = 0.05
+    if cumRet > threshold then 
+        Positive 
+    elif cumRet < -threshold then
+        Negative
+    else
+        Neutral
 
 let analyzeDataset (dt: (Label * AnnouncementDayReturn) []): DatasetOverview = 
     let labelCount = 
@@ -173,6 +171,7 @@ let proportion count total = float count / float total
 
 let laplace count total = float (count+1) / float (total+1)
 
+/// This counts the frequencies of tokens in a document.
 let countIn (docs: TokenizedDoc seq) (token: Token) =
     docs
     |> Seq.filter (Set.contains token)
@@ -199,12 +198,12 @@ let learn (docs: ('Label * string)[])
           (vocabulary: Token Set) =
     let total = docs.Length
     docs
-    |> Array.map (fun (label, docString) -> label, tokenizer docString)
-    |> Seq.groupBy fst
-    |> Seq.map (fun (label, (xs: seq<'Label * TokenizedDoc>)) -> 
+    |> PSeq.map (fun (label, docString) -> label, tokenizer docString)
+    |> PSeq.groupBy fst
+    |> PSeq.map (fun (label, (xs: seq<'Label * TokenizedDoc>)) -> 
         let tokenizedDocs = xs |> Seq.map snd
         label, analyze tokenizedDocs total vocabulary)
-    |> Seq.toArray
+    |> PSeq.toArray
 
 let train (docs: ('Label * string)[]) 
           (tokenizer: Tokenizer)
@@ -229,7 +228,7 @@ let onlyPositiveOrNegative =
     |> Seq.toArray
 
 let datasetCount = onlyPositiveOrNegative |> Seq.length
-let training, validation = onlyPositiveOrNegative.[.. 129], onlyPositiveOrNegative.[130 ..]
+let training, validation = onlyPositiveOrNegative.[.. 1500], onlyPositiveOrNegative.[1501 ..]
 
 (**
 ## Tokenizers
@@ -425,7 +424,6 @@ $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
 $n_{t,d}$ : number of times a term *t* is present in a document *d*.
 *)
 
-
 // Term Frequency (TF)
 let DocTerms (doc: string) = 
     doc.Split(" ")
@@ -436,6 +434,56 @@ let NumberOfTermsInDoc (docTerms: string []) =
     docTerms
     |> Seq.length
     |> float
+
+// This is the term frequency (TF)
+let docTermFrequency (docTerms: string []) =
+    docTerms 
+    |> Array.countBy id
+
+/// This is the inverse document frequency (IDF)
+let numberOfDocsContainingTerms (docs: string [] []) =
+    let numberOfDocsByTerm = 
+        docs
+        |> Array.collect Array.distinct
+        |> Array.countBy id
+    let n = docs.Length
+    numberOfDocsByTerm
+    |> Array.map(fun (term, docsWithTerm) ->
+        term, log(float n / float docsWithTerm))
+    |> Map
+
+let tfidf (doc: string []) (idf: Map<string, float>) =
+    doc
+    |> docTermFrequency
+    |> Array.map (fun (term, tf) ->
+        term, float tf * idf.[term])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+let inverseDocFrequency (docs)
+
+let termFrequencies (docTerms: string []) =
+    let termCounts = docTerms |> Array.countBy id 
+    let numberOfTermsInDoc =
+        termCounts
+        |> Seq.sumBy snd
+        |> float
+    termCounts
+    |> Array.map(fun (term, count) -> 
+        (term, float count / numberOfTermsInDoc ))            
+    |> Map
 
 let TermCountInDoc (docTerms: string []) (term: string) = 
     docTerms
@@ -470,7 +518,7 @@ But how common it is in the *entire* corpus we're mining?
 
 The spareness of a term *t* is measured commonly by its **inverse document frequency**:
 
-- $IDF(t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
+- $IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
 
 *)
 
@@ -539,7 +587,6 @@ let wordBarChart (terms: TfIdfByTerm []) (title: string) =
 wordBarChart commonTerms "Common Terms" |> Chart.Show
 wordBarChart rareTerms "Rare terms" |> Chart.Show
 
-
 (**
 # To-do
 - Combine TfIdf with some tokenizer
@@ -550,5 +597,4 @@ wordBarChart rareTerms "Rare terms" |> Chart.Show
     2. bi-grams (with regex)
     3. (Porters algorithm ?)
     4. TfIdf filter (threshold -> hyperparameter ?)
-
 *)
