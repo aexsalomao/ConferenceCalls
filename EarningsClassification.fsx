@@ -27,24 +27,36 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let datasetRaw = readJson ("data-cache/ReturnsAroundCall2500.json") |> Seq.toArray
+let rawDataset = readJson ("data-cache/ReturnsAroundCall2500.json") |> Seq.toArray
 
 (**
 # Analyzing paragraphs
-Some paragraphs are longer than others, and some "paragraphs" aren't even real paragraphs.
-Bimodal distribution ?
+Some paragraphs are longer than others, and some "paragraphs" aren't even real paragraphs. One-liners like opening and closing remarks add noise to our text dataset and should be taken care of. 
 *)
 
-let paragraphLengths = 
-    datasetRaw
+let shortParagraphs = 
+    rawDataset
+    |> Array.collect (fun xs -> 
+        xs.Transcript.Paragraphs 
+        |> Array.filter (fun paragraph -> paragraph.Length < 100))
+
+shortParagraphs
+|> Array.take 10
+|> Array.iter (printfn "%s")
+
+let histogramParagraphLength = 
+    rawDataset
     |> Seq.collect (fun document -> 
         document.Transcript.Paragraphs
         |> Seq.map (fun paragraph -> float paragraph.Length))
     // Purely for visualization purposes
-    |> Seq.filter (fun charCount -> charCount < 1500.)
+    |> Seq.filter (fun charCount -> charCount < 1250.)
     |> Seq.toArray
     |> Chart.Histogram
-    |> Chart.withSize(1000., 1000.)
+    |> Chart.withX_AxisStyle "Number of characters per paragraph"
+    |> Chart.withY_AxisStyle "Frequency"
+    |> Chart.withTitle "Histogram: Number of characters per paragraph"
+    |> Chart.withSize(500., 500.)
     |> Chart.Show
 
 (**
@@ -71,9 +83,9 @@ let parseLabel (cumRet: float): Label =
     else
         Neutral
 
-let cleanTranscript (paragraphs: string []): string =
+let removeShortParagraphs (paragraphs: string []): string =
     paragraphs
-    |> Seq.filter (fun p -> p.Length >= 100)
+    |> Seq.filter (fun p -> p.Length > 100)
     |> String.concat (" ")
 
 let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
@@ -82,7 +94,7 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
 
         let tickerExchange = (xs.Transcript.Ticker , xs.Transcript.Exchange)
         let label = parseLabel xs.CumulativeReturn
-        let transcript = cleanTranscript xs.Transcript.Paragraphs
+        let transcript = removeShortParagraphs xs.Transcript.Paragraphs
 
         { TickerExchange = tickerExchange
           Label = label
@@ -91,16 +103,16 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
 
     |> Seq.toArray
 
-let myTranscripts: LabeledTranscript [] = labelDataset datasetRaw
+let myTranscripts: LabeledTranscript [] = labelDataset rawDataset
 
 (**
-## Analyze dataset per label
+## Analyze dataset
 *)
 
 type LabelSummary = 
     { Label : Label
       Count : int
-      AvgRet : float }
+      AvgCumRet : float }
 
 let analyzeLabel (label: Label): LabelSummary = 
     let rets = 
@@ -110,16 +122,36 @@ let analyzeLabel (label: Label): LabelSummary =
         |> Seq.toArray
     
     let count = rets.Length
-    let avgRet = Array.average rets 
+    let avgCumRet = Math.Round (Array.average rets, 4)
       
     { Label = label
       Count = count
-      AvgRet = avgRet}
+      AvgCumRet = avgCumRet}
 
-myTranscripts 
-|> Seq.map (fun xs -> xs.Label) 
-|> Set.ofSeq
-|> Set.map analyzeLabel
+(**
+## Cumulative returns, histogram
+*)
+
+let retsByLabel (label: Label) = 
+    myTranscripts
+    |> Seq.filter (fun xs -> xs.Label = label)
+    |> Seq.map (fun xs -> xs.CumulativeReturn)
+    |> Seq.toArray
+
+let returnsDistribution =
+    myTranscripts
+    |> Seq.map (fun xs -> xs.Label)
+    |> Set.ofSeq
+    |> Seq.map (fun label -> 
+        let labelStats = analyzeLabel label
+        Chart.Histogram (data = retsByLabel label, 
+                         Name = $"{labelStats.Label} (N = {labelStats.Count}, Avg. = {labelStats.AvgCumRet})"))
+    |> Seq.toArray
+    |> Chart.Combine
+    |> Chart.withTitle "Histogram: Cumulative returns"
+    |> Chart.withSize (1000., 500.)
+
+Chart.Show returnsDistribution
 
 (**
 # Naive Bayes Module
@@ -156,7 +188,6 @@ let proportion count total = float count / float total
 
 let laplace count total = float (count+1) / float (total+1)
 
-/// This counts the frequencies of tokens in a document.
 let countIn (docs: TokenizedDoc seq) (token: Token) =
     docs
     |> Seq.filter (Set.contains token)
@@ -198,26 +229,29 @@ let train (docs: ('Label * string)[])
     classifier
 
 (**
-# Vocabulary, Dataset split
+## Dataset split
+*)
+
+let training, validation =
+
+    let posOrNeg = 
+        myTranscripts
+        |> Seq.filter (fun xs -> xs.Label <> Neutral)
+        |> Seq.map (fun xs -> (xs.Label, xs.Transcript))
+        |> Seq.toArray
+
+    let cutoff = (float posOrNeg.Length) * 0.8 |> int
+
+    posOrNeg.[.. cutoff], posOrNeg.[cutoff + 1 ..]
+
+(**
+## Tokenizer
 *)
 
 let vocabulary (tokenizer: Tokenizer) (corpus: string seq) = 
     corpus
     |> Seq.map tokenizer
     |> Set.unionMany
-
-let onlyPositiveOrNegative = 
-    myTranscripts
-    |> Seq.filter (fun xs -> xs.Label <> Neutral)
-    |> Seq.map (fun xs -> (xs.Label, xs.Transcript))
-    |> Seq.toArray
-
-let datasetCount = onlyPositiveOrNegative |> Seq.length
-let training, validation = onlyPositiveOrNegative.[.. 1000], onlyPositiveOrNegative.[1001 ..]
-
-(**
-## Tokenizer
-*)
 
 let matchOnlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
 
@@ -244,46 +278,27 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
         if label = classifier text then 1.0 else 0.)
     |> printfn "Correctly classified: %.4f"
 
-// Evaluate tokenizer 1 -> 0.6937 (Cumulative return threshold -> abs 0.075)
+// Evaluate tokenizer 1 -> 0.7126 (Cumulative return threshold -> abs 0.05)
 let allTokens = applyTokenizer tokenizeAllWords
 evaluate tokenizeAllWords allTokens
-
-(**
-# Analysis of Positive and Negative words
--> Difference + tfidf
-*)
-
-let allPositiveText = 
-    training 
-    |> Seq.filter (fun (label, _) -> label=Positive)
-    |> Seq.map (fun (_, txt) -> txt)
-    |> Seq.toArray
-
-let allNegativeText = 
-    training
-    |> Seq.filter (fun (label, _) -> label=Negative)
-    |> Seq.map (fun (_, txt) -> txt)
-    |> Seq.toArray
 
 (**
 ## N-Grams
 *)
 
-let trySingleWordMatch (word: string) = 
-    word
-    |> matchOnlyWords.Matches
-    |> Seq.tryExactlyOne
+let matchSingleWord (word: string): option<Match> = 
+    let candidateMatch = matchOnlyWords.Match word
+    if candidateMatch.Success then Some (candidateMatch) else None
 
-let completeNGram (n: int) (nGramArr: string []) = 
-    nGramArr
-    |> Seq.choose trySingleWordMatch
-    |> Seq.map (fun matchedWord -> matchedWord.Value)
-    |> fun xs -> if (xs |> Seq.length) = n then Some (xs) else None
-
-let nGrams (n: int) (text: string) = 
+let nGrams (n: int) (text: string): Set<string> = 
     text.Split(" ")
     |> Seq.windowed n
-    |> Seq.choose (completeNGram n)
+    |> Seq.map (fun words -> 
+                words 
+                |> Seq.choose matchSingleWord 
+                |> Seq.map (fun m -> m.Value) 
+                |> Seq.toArray)
+    |> Seq.filter (fun nGram -> nGram.Length = n)
     |> Seq.map (String.concat(" "))
     |> Set.ofSeq
 
@@ -296,11 +311,11 @@ let twoGramsTest = woodpecker |> TwoGrams
 let ThreeGrams = nGrams 3
 let threeGramsTest = woodpecker |> ThreeGrams
 
-// Evaluate TwoGrams -> 0.7380 (Cumulative return threshold -> abs 0.5)
+// Evaluate TwoGrams -> 0.7480 (Cumulative return threshold -> abs 0.5)
 let twoGrams = applyTokenizer TwoGrams
 evaluate TwoGrams twoGrams
 
-// Evaluate ThreeGrams -> 0.7380 (Cumulative return threshold -> abs 0.5)
+// Evaluate ThreeGrams -> 0.7559 (Cumulative return threshold -> abs 0.5)
 let threeGrams = applyTokenizer ThreeGrams
 evaluate ThreeGrams threeGrams
 
@@ -330,10 +345,10 @@ $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
 $n_{t,d}$ : number of times a term *t* is present in a document *d*.
 *)
 
-// Term Frequency (TF)
+/// Term Frequency (TF)
 let DocTerms (doc: string) = 
     doc.Split(" ")
-    |> Seq.choose trySingleWordMatch
+    |> Seq.choose matchSingleWord
     |> Seq.map (fun matchedWord -> matchedWord.Value)
 
 let NumberOfTermsInDoc (docTerms: string []) = 
@@ -406,12 +421,5 @@ let wordBarChart (terms: (string * float) []) (title: string) =
 
 (**
 # To-do
-- Combine TfIdf with some tokenizer
-- Build Porters algorithm ? 
-
-- Pipeline:
-    1. Training data
-    2. bi-grams (with regex)
-    3. (Porters algorithm ?)
-    4. TfIdf filter (threshold -> hyperparameter ?)
+- Combine TfIdf with NGrams
 *)
