@@ -312,5 +312,5 @@ let TranscriptsToJson (transcripts: Transcript [], fileName: string) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*
-TranscriptsToJson (asynchTest1to100, "data-cache/Motley100.json")
+TranscriptsToJson (async1to10, "data-cache/Motley100.json")
 *)
