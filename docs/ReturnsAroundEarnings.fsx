@@ -1,9 +1,12 @@
-#r "nuget: FSharp.Data, 4.1.1"
-#r "nuget: Newtonsoft.Json, 13.0.1"
+(**
+# Returns around earnings announcements
+*)
+
+#r "nuget: FSharp.Data"
+#r "nuget: Newtonsoft.Json"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
-#load "PagePParsing.fsx"
-#load "secrets.fsx"
+#load "ParsingMotleyFool.fsx"
 #load "Common.fsx"
 
 open System
@@ -11,7 +14,7 @@ open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
 
-open PagePParsing
+open ParsingMotleyFool
 open Common
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
@@ -41,7 +44,6 @@ type TiingoSupportedTickersCsv = CsvProvider<Sample="data-cache/SupportedTiingoT
 let supportedTiingoTickers = TiingoSupportedTickersCsv.GetSample()
 
 supportedTiingoTickers.Rows
-|> Seq.map (fun x -> x.Exchange)
 
 // Filtering 'allTranscripts'
 type SupportedTicker = {Exchange : string; Ticker : string}

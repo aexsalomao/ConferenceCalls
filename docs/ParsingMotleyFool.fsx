@@ -1,3 +1,22 @@
+(**
+---
+title: Parsing Motley Fool
+category: Scripts
+categoryindex: 2
+index: 1
+---
+*)
+
+(**
+# Parsing Motley Fool
+*)
+
+(**
+The objective of this `ParsingMotleyFool.fsx` script is to give a few examples on how to parse html documents with F#. More specifically, we will be attempting to parse earnings call transcripts from <a href="https://www.fool.com" target="_blank">Motley Fool</a>.
+
+Before getting started, lets download the <a href="https://fsprojects.github.io/FSharp.Data/" target="_blank">Fsharp Data</a> package using .NET's package manager <a href="https://www.nuget.org/" target="_blank">NuGet</a>:
+*)
+
 #r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json"
 
@@ -6,7 +25,18 @@ open Newtonsoft.Json
 open System
 
 (**
-# Generic Page - Urls
+## Transcript - Url
+We can download or parse individual html documents with their url. Since each call transcript will have a different url, we need to find an effective and consistent way to fetch individual urls from motley fool's website. Fortunately, if we take a look at <a href="https://www.fool.com/earnings-call-transcripts/?page=1" target="_blank">motley fool's front page</a>, we see that all call transcripts are tagged with hyperlinks. 
+*)
+
+(**
+
+<img src="FsdocsImages\motley_fool_front_page.png" width="85%" >
+
+*)
+
+(**
+Since the transcripts are tagged with a specific hypertext referece (href) (`"/earnings/call-transcripts"`), we can use the `CssSelect` method from FSharp Data to find all elements in a given front page that match the transcript href that we are looking for. After fetching the urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
 *)
 
 type FrontPageDocument = HtmlDocument
@@ -23,8 +53,23 @@ let findTranscriptUrls (pageDoc: FrontPageDocument): string [] =
     |> Seq.choose tryHref
     |> Seq.toArray
     
+(** 
+Lets take a look at the first three call transcript urls `CssSelect` was able to match:
+*)
+
+let exampleFrontPageDoc: FrontPageDocument = HtmlDocument.Load "https://www.fool.com/earnings-call-transcripts/?page=1"
+
+/// First three urls
+exampleFrontPageDoc
+|> findTranscriptUrls
+|> Array.take 3
+|> Array.iter (printfn "%s")
+
+(*** include-output***)
+
 (**
-# Generic Transcript - Ticker
+## Transcript - Ticker & Exchange
+Apart from using the `CssSelect` method to search for transcript urls we can also use it to extract other key information like a company's ticker and exchange as well as the time and date of the earnings call. Since we are not certain that we'll retrieve both a ticker and an exchange from *every* single transcript we parse, we can use match expressions and option types to make sure to return only those matches that contain both a valid ticker and exchange. 
 *)
 
 type TranscriptDocument = HtmlDocument
@@ -48,9 +93,28 @@ let findTickerExchange (doc: TranscriptDocument): option<string * string> =
     |> tryTickerExchange
 
 (**
+Lets see if we can fetch Tesla's ticker and exchange from its <a href="https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/" target="_blank">latest earnings call</a>:
+*)
+
+(**
+<img src="FsdocsImages\tesla_motley_fool.png" width="85%">
+*) 
+
+/// Tesla transcript html document
+let teslaDoc: TranscriptDocument = HtmlDocument.Load "https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/"
+
+// Tesla ticker and exchange
+findTickerExchange teslaDoc
+
+(*** include-it ***)
+
+(**
 ## Transcript - Date & Time
 *)
 
+(**
+We can use the `CssSelect` method to search for the exact date and time of the earnings call.
+*)
 
 (**
 ### Date
@@ -77,6 +141,11 @@ let findDate (doc: TranscriptDocument): option<string>=
     |> Seq.tryExactlyOne
     |> tryDate
 
+/// Date of Tesla's call:
+findDate teslaDoc
+
+(*** include-it ***)
+
 (**
 ### Time
 *)
@@ -97,10 +166,15 @@ let findTime (doc: TranscriptDocument) =
     |> Seq.tryExactlyOne
     |> tryTime
 
+/// Time of Tesla's call
+findTime teslaDoc
 
+(*** include-it ***)
 
 (**
 ### DateTime
+
+Now that we have working functions for both the date and time of each call, lets combine these functions together and convert the information we have on the date and time of an earnings call to a <a href="https://docs.microsoft.com/en-us/dotnet/api/system.datetime?view=net-5.0" target="_blank">DateTime struct</a> :
 *)
 
 // DateTime converter
@@ -114,8 +188,15 @@ let findDateTime (doc: TranscriptDocument): option<DateTime> =
     | Some date, Some time -> Some ($"{date} {time}" |> convertToDateTime) 
     | _ -> None
 
+/// Tesla call DateTime
+findDateTime teslaDoc
+
+(*** include-it ***)
+
 (**
-# Generic Transcript - Paragraphs
+## Transcript - Paragraphs
+
+In html, a paragraph is ...
 *)
 
 let findParagraphs (doc: HtmlDocument): string [] = 
@@ -126,9 +207,18 @@ let findParagraphs (doc: HtmlDocument): string [] =
     |> Seq.skip 5
     |> Seq.toArray
 
+// First two paragraphs
+teslaDoc 
+|> findParagraphs
+|> Array.take 2
+|> Array.iter (printfn "%s")
+
+(*** include-output***)
+
 (**
-# Transcript Record
-- Adding more structure ...
+## Transcript Record
+
+So far we have worked with individual functions that take in one single argument, an html transcript document. Since they all work with the `TranscriptDocument` type, we can easily combine these functions together to form one single function that returns all the individual bits of data that we want.
 *)
 
 type Transcript = 
@@ -152,6 +242,12 @@ let parseTrancriptDoc (doc: TranscriptDocument): option<Transcript> =
                Paragraphs = paragraphs}
     | _ -> None
 
+/// Tesla transcript record
+let teslaTranscript = 
+    parseTrancriptDoc teslaDoc
+
+(*** include-output ***)
+
 (**
 ## Async methods
 *)
@@ -165,7 +261,6 @@ let asyncTranscript (url: string) =
 
 let asyncPage (n: int) = 
     async {
-        printfn $"{n}"
         let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}" 
         let! pageDoc = HtmlDocument.AsyncLoad frontPageP
 
@@ -173,7 +268,7 @@ let asyncPage (n: int) =
             pageDoc 
             |> findTranscriptUrls 
             |> Seq.map asyncTranscript 
-            |> Async.Parallel
+            |> fun xs -> Async.Parallel(xs, 5)
             |> Async.RunSynchronously
             |> Seq.choose (
              function
@@ -185,18 +280,31 @@ let asyncPage (n: int) =
         }
 
 (**
-# Parse Transcript Pages
+### Parse Transcript Pages
 *)
 
-let async1to100 = 
-    [1 .. 100]
+let async1to10 = 
+    [1 .. 10]
     |> Seq.map asyncPage
-    |> Async.Parallel
+    |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
 
+/// Total number of transcripts
+printfn $"N: {async1to10.Length}"
+
+(*** include-output ***)
+
+/// First three transcripts
+async1to10
+|> Array.take 3
+|> Array.iter (fun transcript -> 
+    printfn $" Datetime: {transcript.Date} --- Ticker, Exchange: {transcript.Ticker}, {transcript.Exchange}")
+
+(*** include-output ***)
+
 (**
-# Export to json
+### Export to json
 *)
 
 let TranscriptsToJson (transcripts: Transcript [], fileName: string) = 
@@ -204,5 +312,5 @@ let TranscriptsToJson (transcripts: Transcript [], fileName: string) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*
-TranscriptsToJson (async1to100, "data-cache/Motley100.json")
+TranscriptsToJson (asynchTest1to100, "data-cache/Motley100.json")
 *)
