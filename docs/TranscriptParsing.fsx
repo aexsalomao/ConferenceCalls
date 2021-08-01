@@ -8,11 +8,11 @@ index: 1
 *)
 
 (**
-# Parsing Motley Fool
+# Transcript Parsing
 *)
 
 (**
-The objective of this `ParsingMotleyFool.fsx` script is to give a few examples on how to parse html documents with F#. More specifically, we will be attempting to parse earnings call transcripts from <a href="https://www.fool.com" target="_blank">Motley Fool</a>.
+The objective of this `TranscriptParsing.fsx` script is to give a few examples on how to parse html documents with F#. More specifically, we will be attempting to parse earnings call transcripts from <a href="https://www.fool.com" target="_blank">Motley Fool</a>.
 
 Before getting started, lets download the <a href="https://fsprojects.github.io/FSharp.Data/" target="_blank">Fsharp Data</a> package using .NET's package manager <a href="https://www.nuget.org/" target="_blank">NuGet</a>:
 *)
@@ -30,13 +30,11 @@ We can download or parse individual html documents with their url. Since each ca
 *)
 
 (**
-
-<img src="FsdocsImages\motley_fool_front_page.png" width="85%" >
-
+<img src="FsdocsImages\motley_fool_front_page.png" width="70%" >
 *)
 
 (**
-Since the transcripts are tagged with a specific hypertext referece (href) (`"/earnings/call-transcripts"`), we can use the `CssSelect` method from FSharp Data to find all elements in a given front page that match the transcript href that we are looking for. After fetching the urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
+Since the transcripts are tagged with a specific hypertext reference (href) (`"/earnings/call-transcripts"`), we can use the `CssSelect` method from FSharp Data to find all elements in a given front page that match the transcript href that we are looking for. After fetching the urls, we can download any transcript we want as an html document using the `HtmlDocument.Load` method, also from FSharp Data.
 *)
 
 type FrontPageDocument = HtmlDocument
@@ -97,7 +95,7 @@ Lets see if we can fetch Tesla's ticker and exchange from its <a href="https://w
 *)
 
 (**
-<img src="FsdocsImages\tesla_motley_fool.png" width="85%">
+<img src="FsdocsImages\tesla_motley_fool.png" width="70%">
 *) 
 
 /// Tesla transcript html document
@@ -122,10 +120,11 @@ We can use the `CssSelect` method to search for the exact date and time of the e
 
 /// Format date string
 let cleanDate (node: HtmlNode): option<string> = 
-    let dateSplit = node.InnerText().ToUpperInvariant().Replace(".", "").Replace(",", "").Trim().Split(" ")
-    match dateSplit with
-    |[|month; day; year|] -> Some ($"{month.[..2]} {day} {year}") 
-    | _ -> None
+    node.InnerText().ToUpperInvariant().Replace(".", "").Replace(",", "").Trim().Split(" ")
+    |> fun dateArr ->     
+        match dateArr with
+        |[|month; day; year|] -> Some ($"{month.[..2]} {day} {year}") 
+        | _ -> None
 
 /// Match html node with some date
 let tryDate (node: HtmlNode option): option<string> =
@@ -307,7 +306,7 @@ async1to10
 ### Export to json
 *)
 
-let TranscriptsToJson (transcripts: Transcript [], fileName: string) = 
+let TranscriptsToJson (fileName: string) (transcripts: Transcript []) = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 

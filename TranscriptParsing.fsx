@@ -49,10 +49,7 @@ let findTickerExchange (doc: TranscriptDocument): option<string * string> =
 
 (**
 ## Transcript - Date & Time
-*)
 
-
-(**
 ### Date
 *)
 
@@ -96,8 +93,6 @@ let findTime (doc: TranscriptDocument) =
     doc.CssSelect("em[id='time']")
     |> Seq.tryExactlyOne
     |> tryTime
-
-
 
 (**
 ### DateTime
@@ -173,7 +168,7 @@ let asyncPage (n: int) =
             pageDoc 
             |> findTranscriptUrls 
             |> Seq.map asyncTranscript 
-            |> Async.Parallel
+            |> fun xs -> Async.Parallel(xs, 5)
             |> Async.RunSynchronously
             |> Seq.choose (
              function
@@ -186,14 +181,24 @@ let asyncPage (n: int) =
 
 (**
 # Parse Transcript Pages
-*)
+- Fix this ?
 
-let async1to100 = 
-    [1 .. 100]
+let async1to75 = 
+    [1 .. 75]
     |> Seq.map asyncPage
-    |> Async.Parallel
+    |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
+
+let async76to150 = 
+    [76 .. 150]
+    |> Seq.map asyncPage
+    |> fun xs -> Async.Parallel(xs, 5)
+    |> Async.RunSynchronously
+    |> Array.collect Seq.toArray
+
+let async1to150 = Array.append async1to75 async76to150
+*)
 
 (**
 # Export to json
@@ -204,5 +209,5 @@ let TranscriptsToJson (transcripts: Transcript [], fileName: string) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*
-TranscriptsToJson (async1to100, "data-cache/Motley100.json")
+TranscriptsToJson (async1to150, "data-cache/Transcripts3000.json")
 *)
