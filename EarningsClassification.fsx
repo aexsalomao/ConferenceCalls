@@ -57,7 +57,8 @@ let histogramParagraphLength =
     |> Chart.withY_AxisStyle "Frequency"
     |> Chart.withTitle "Histogram: Number of characters per paragraph"
     |> Chart.withSize(500., 500.)
-    |> Chart.Show
+
+/// Chart.Show histogramParagraphLength
 
 (**
 # Labeled Transcript
@@ -151,7 +152,7 @@ let returnsDistribution =
     |> Chart.withTitle "Histogram: Cumulative returns"
     |> Chart.withSize (1000., 500.)
 
-Chart.Show returnsDistribution
+/// Chart.Show returnsDistribution
 
 (**
 # Naive Bayes Module
@@ -253,11 +254,11 @@ let vocabulary (tokenizer: Tokenizer) (corpus: string seq) =
     |> Seq.map tokenizer
     |> Set.unionMany
 
-let matchOnlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
+let onlyWordsRegex = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
 
 let tokenizeAllWords (text: string) = 
     text
-    |> matchOnlyWords.Matches
+    |> onlyWordsRegex.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
@@ -286,38 +287,45 @@ evaluate tokenizeAllWords allTokens
 ## N-Grams
 *)
 
-let matchSingleWord (word: string): option<Match> = 
-    let candidateMatch = matchOnlyWords.Match word
+let onylWords (word: string): option<Match> = 
+    let candidateMatch = onlyWordsRegex.Match word
     if candidateMatch.Success then Some (candidateMatch) else None
 
-let nGrams (n: int) (text: string): Set<string> = 
+let nGrams (n: int) (text: string) = 
     text.Split(" ")
     |> Seq.windowed n
     |> Seq.map (fun words -> 
                 words 
-                |> Seq.choose matchSingleWord 
+                |> Seq.choose onylWords 
                 |> Seq.map (fun m -> m.Value) 
                 |> Seq.toArray)
     |> Seq.filter (fun nGram -> nGram.Length = n)
     |> Seq.map (String.concat(" "))
-    |> Set.ofSeq
+    |> Seq.toArray
+
+let twoGramsTokenizer (text: string) = 
+    text 
+    |> nGrams 1
+    |> Set.ofArray
+
+let threeGramsTokenizer (text: string) = 
+    text
+    |> nGrams 3
+    |> Set.ofArray
 
 let woodpecker = 
     "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
 
-let TwoGrams = nGrams 2
-let twoGramsTest = woodpecker |> TwoGrams
-
-let ThreeGrams = nGrams 3
-let threeGramsTest = woodpecker |> ThreeGrams
+let twoGramsTest = twoGramsTokenizer woodpecker
+let threeGramsTest = threeGramsTokenizer woodpecker
 
 // Evaluate TwoGrams -> 0.7480 (Cumulative return threshold -> abs 0.5)
-let twoGrams = applyTokenizer TwoGrams
-evaluate TwoGrams twoGrams
+let twoGramsTrain = applyTokenizer twoGramsTokenizer
+evaluate twoGramsTokenizer twoGramsTrain
 
 // Evaluate ThreeGrams -> 0.7559 (Cumulative return threshold -> abs 0.5)
-let threeGrams = applyTokenizer ThreeGrams
-evaluate ThreeGrams threeGrams
+let threeGramsTrain = applyTokenizer threeGramsTokenizer
+evaluate threeGramsTokenizer threeGramsTrain
 
 (**
 - Machine Learning notes/slides (Sabina)
@@ -336,52 +344,136 @@ is filtering by "term frequency-inverse document frequency" (tf-idf).
 *)
 
 (**
-**Term frequency (TF)**
-
-Instead of just representing presence or absence of a word, we count words (calculate frequency) in the document.
-
+## Term Frequency (TF)
 $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
-
 $n_{t,d}$ : number of times a term *t* is present in a document *d*.
 *)
 
-/// Term Frequency (TF)
-let DocTerms (doc: string) = 
-    doc.Split(" ")
-    |> Seq.choose matchSingleWord
-    |> Seq.map (fun matchedWord -> matchedWord.Value)
+type DocTransfromer = string -> string []
 
-let NumberOfTermsInDoc (docTerms: string []) = 
-    docTerms
-    |> Seq.length
-    |> float
+type TermFreq = 
+    {Term : string
+     Tf : float}
 
-// This is the term frequency (TF)
-let docTermFrequency (docTerms: string []) =
-    docTerms 
-    |> Array.countBy id
+let tf (doc: string) (docTransformer: DocTransfromer): TermFreq [] =
+    
+    let tokenizedDoc = docTransformer doc
+    let nTerms = float tokenizedDoc.Length
+   
+    tokenizedDoc
+    |> Seq.countBy id
+    |> Seq.map (fun (term, count) ->
+                let tf = (float count) / nTerms
+                {Term = term
+                 Tf = tf})
+    |> Seq.toArray
 
-/// This is the inverse document frequency (IDF)
-let numberOfDocsContainingTerms (docs: string [] []) =
+
+(**
+## Inverse document frequency (IDF)
+$IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
+*)
+
+type InverseDocFreq = 
+    {Term : string
+     Idf : float}
+
+let idf (docs : string []) (docTransfromer: DocTransfromer): Map<string, InverseDocFreq>= 
+
     let numberOfDocsByTerm = 
-        docs
-        |> Array.collect Array.distinct
-        |> Array.countBy id
+            docs
+            |> Seq.map docTransfromer
+            |> Seq.collect Seq.distinct
+            |> Seq.countBy id
+            |> Seq.toArray
+
     let n = docs.Length
+
     numberOfDocsByTerm
-    |> Array.map(fun (term, docsWithTerm) ->
-        term, log(float n / float docsWithTerm))
-    |> Map
+    |> Seq.map (fun (term, docsWithTerm) ->
+                let idf = log (float n / float docsWithTerm)
+                term, {Term = term ; Idf = idf})
+    |> Seq.toArray
+    |> Map.ofArray
 
-let tfidf (doc: string []) (idf: Map<string, float>) =
-    doc
-    |> docTermFrequency
-    |> Array.map (fun (term, tf) ->
-        term, float tf * idf.[term])
+(**
+## Term frequency - Inverse Document Frequency
+$TF-IDF(t, d) = TF(t, d) * IDF(t)$
+*)
 
-myTranscripts
-|> Seq.collect (fun xs -> DocTerms xs.Transcript)
-|> Seq.toArray
+type TermFreqInverseDocFreq = 
+    { Term : string
+      TfIdf : float}
+
+let tfIdf (doc: string)
+          (docTransformer : DocTransfromer)
+          (inverseDocFreq: Map<string, InverseDocFreq>) = 
+   
+   let docTermFrequency = tf doc docTransformer
+   
+   docTermFrequency
+   |> Seq.choose (fun xs -> 
+    match Map.tryFind xs.Term inverseDocFreq with
+    | None -> None
+    | Some ys -> let tfIdf = xs.Tf * ys.Idf 
+                 Some ({Term = xs.Term
+                        TfIdf = tfIdf}))
+    |> Seq.toArray
+
+// Test docs
+let doc1 = snd training.[0]
+let docs1 = training |> Seq.take 100 |> Seq.map snd |> Seq.toArray
+
+/// DocTransformers
+let oneGram: DocTransfromer = nGrams 1
+let twoGrams: DocTransfromer = nGrams 2
+let threeGrams: DocTransfromer = nGrams 3
+
+/// Tf test
+tf doc1 oneGram
+
+/// Idf test
+let myMap1 = idf docs1 oneGram
+let myMap2 = idf docs1 twoGrams
+let myMap3 = idf docs1 threeGrams
+
+// Tf-Idf test
+let tfIdfDoc1 = tfIdf doc1 oneGram myMap1
+let tfIdfDoc2 = tfIdf doc1 twoGrams myMap2
+let tfIdfDoc3 = tfIdf doc1 threeGrams myMap3
+
+(**
+# Word bar chart
+*)
+
+/// Testing on entire sample
+let allDocs = training |> Seq.map snd |> Seq.toArray
+let myIdfMap = idf allDocs twoGrams
+
+let tfIdfDoc = tfIdf doc1 twoGrams myIdfMap
+
+let lowTfIdfWords = 
+    tfIdfDoc
+    |> Seq.sortBy (fun xs -> xs.TfIdf)
+    |> Seq.take 25
+    |> Seq.toArray
+
+let highTfIdfWords = 
+    tfIdfDoc 
+    |> Seq.sortByDescending (fun xs -> xs.TfIdf)
+    |> Seq.take 25
+    |> Seq.toArray
+
+let wordBarChart (words : TermFreqInverseDocFreq []) (title: string) = 
+    words
+    |> Seq.map (fun xs -> xs.Term, xs.TfIdf)
+    |> Seq.toArray
+    |> Chart.Bar
+    |> Chart.withTitle title
+    |> Chart.withSize (1000., 500.)
+
+wordBarChart lowTfIdfWords "Low Tf-Idf words (Common and rare words)" |> Chart.Show
+wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 
 (**
 **Inverse document frequency (IDF)**
@@ -413,13 +505,7 @@ the weights hence tend to filter out common terms.
 
 *)
 
-let wordBarChart (terms: (string * float) []) (title: string) = 
-    terms
-    |> Chart.Bar
-    |> Chart.withTitle title
-    |> Chart.withX_AxisStyle "Term Frequency - Inverse Document Frequency"
-
 (**
 # To-do
-- Combine TfIdf with NGrams
+- TfIdf by NGrams Tokenizer
 *)
