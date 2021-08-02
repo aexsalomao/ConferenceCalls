@@ -269,7 +269,7 @@ let applyTokenizer (tokenizer: Tokenizer) =
     |> vocabulary tokenizer
 
 (**
-# Evaluate by tokenizer and token set
+## Evaluate performance by tokenizer
 *)
 
 let evaluate (tokenizer: Tokenizer) (tokens: Token Set) = 
@@ -279,19 +279,15 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
         if label = classifier text then 1.0 else 0.)
     |> printfn "Correctly classified: %.4f"
 
-// Evaluate tokenizer 1 -> 0.7126 (Cumulative return threshold -> abs 0.05)
-let allTokens = applyTokenizer tokenizeAllWords
-evaluate tokenizeAllWords allTokens
-
 (**
-## N-Grams
+## N-Grams (DocTransformer)
 *)
 
 let onylWords (word: string): option<Match> = 
     let candidateMatch = onlyWordsRegex.Match word
     if candidateMatch.Success then Some (candidateMatch) else None
 
-let nGrams (n: int) (text: string) = 
+let nGrams (n: int) (text: string): string [] = 
     text.Split(" ")
     |> Seq.windowed n
     |> Seq.map (fun words -> 
@@ -303,45 +299,20 @@ let nGrams (n: int) (text: string) =
     |> Seq.map (String.concat(" "))
     |> Seq.toArray
 
-let twoGramsTokenizer (text: string) = 
+let twoGramsTokenizer (text: string): Set<string> = 
     text 
-    |> nGrams 1
+    |> nGrams 2
     |> Set.ofArray
 
-let threeGramsTokenizer (text: string) = 
+let threeGramsTokenizer (text: string): Set<string> = 
     text
     |> nGrams 3
     |> Set.ofArray
 
-let woodpecker = 
-    "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
-
+/// Some tests
+let woodpecker = "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
 let twoGramsTest = twoGramsTokenizer woodpecker
 let threeGramsTest = threeGramsTokenizer woodpecker
-
-// Evaluate TwoGrams -> 0.7480 (Cumulative return threshold -> abs 0.5)
-let twoGramsTrain = applyTokenizer twoGramsTokenizer
-evaluate twoGramsTokenizer twoGramsTrain
-
-// Evaluate ThreeGrams -> 0.7559 (Cumulative return threshold -> abs 0.5)
-let threeGramsTrain = applyTokenizer threeGramsTokenizer
-evaluate threeGramsTokenizer threeGramsTrain
-
-(**
-- Machine Learning notes/slides (Sabina)
-
-# Feature Selection
-
-To reduce the number of features to something manageable, a common first step is to strip out elements of the raw text other than words.
-    - Punctuation, numbers, HTML tags, proper names ...
-    - *stop words*: "the", "a", "and", "or" ...
-
-Very rare words do convey meaning, but their added computational cost in expanding 
-the set of features that must be considered often exceeds their diagnostic value.
-
-An approach that excludes both common and rare words and has proven very useful in practice 
-is filtering by "term frequency-inverse document frequency" (tf-idf).
-*)
 
 (**
 ## Term Frequency (TF)
@@ -355,7 +326,8 @@ type TermFreq =
     {Term : string
      Tf : float}
 
-let tf (doc: string) (docTransformer: DocTransfromer): TermFreq [] =
+let tf (doc: string) 
+       (docTransformer: DocTransfromer): TermFreq [] =
     
     let tokenizedDoc = docTransformer doc
     let nTerms = float tokenizedDoc.Length
@@ -368,7 +340,6 @@ let tf (doc: string) (docTransformer: DocTransfromer): TermFreq [] =
                  Tf = tf})
     |> Seq.toArray
 
-
 (**
 ## Inverse document frequency (IDF)
 $IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
@@ -378,7 +349,8 @@ type InverseDocFreq =
     {Term : string
      Idf : float}
 
-let idf (docs : string []) (docTransfromer: DocTransfromer): Map<string, InverseDocFreq>= 
+let idf (docs : string []) 
+        (docTransfromer: DocTransfromer): Map<string, InverseDocFreq> = 
 
     let numberOfDocsByTerm = 
             docs
@@ -392,18 +364,23 @@ let idf (docs : string []) (docTransfromer: DocTransfromer): Map<string, Inverse
     numberOfDocsByTerm
     |> Seq.map (fun (term, docsWithTerm) ->
                 let idf = log (float n / float docsWithTerm)
-                term, {Term = term ; Idf = idf})
+                term, {Term = term
+                       Idf = idf})
     |> Seq.toArray
     |> Map.ofArray
 
 (**
 ## Term frequency - Inverse Document Frequency
 $TF-IDF(t, d) = TF(t, d) * IDF(t)$
+
+A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
+the weights hence tend to filter out common terms.
+
 *)
 
 type TermFreqInverseDocFreq = 
-    { Term : string
-      TfIdf : float}
+    { Term: string
+      TfIdf: float}
 
 let tfIdf (doc: string)
           (docTransformer : DocTransfromer)
@@ -420,9 +397,19 @@ let tfIdf (doc: string)
                         TfIdf = tfIdf}))
     |> Seq.toArray
 
+let tfIdfFromDoc (doc: string) 
+                 (docTransformer: DocTransfromer)
+                 (inverseDocFreq: Map<string, InverseDocFreq>) =
+
+    tfIdf doc docTransformer inverseDocFreq
+
+(**
+## Tf-Idf tests
+*)
+
 // Test docs
 let doc1 = snd training.[0]
-let docs1 = training |> Seq.take 100 |> Seq.map snd |> Seq.toArray
+let docs1 = training |> Seq.take 200 |> Seq.map snd |> Seq.toArray
 
 /// DocTransformers
 let oneGram: DocTransfromer = nGrams 1
@@ -431,35 +418,38 @@ let threeGrams: DocTransfromer = nGrams 3
 
 /// Tf test
 tf doc1 oneGram
+tf doc1 twoGrams
+tf doc1 threeGrams
 
 /// Idf test
-let myMap1 = idf docs1 oneGram
-let myMap2 = idf docs1 twoGrams
-let myMap3 = idf docs1 threeGrams
+let idf1 = idf docs1 oneGram
+let idf2 = idf docs1 twoGrams
+let idf3 = idf docs1 threeGrams
 
-// Tf-Idf test
-let tfIdfDoc1 = tfIdf doc1 oneGram myMap1
-let tfIdfDoc2 = tfIdf doc1 twoGrams myMap2
-let tfIdfDoc3 = tfIdf doc1 threeGrams myMap3
+/// Tf-Idf test
+let tfIdfDoc1 = tfIdf doc1 oneGram idf1
+let tfIdfDoc2 = tfIdf doc1 twoGrams idf2
+let tfIdfDoc3 = tfIdf doc1 threeGrams idf3
+
+/// Full sample test - TwoGrams
+let allDocs = training |> Seq.map snd |> Seq.toArray
+let twoGramsIdf = idf allDocs twoGrams
+let threeGramsIdf = idf allDocs threeGrams
+let tfIdfDoc1FullSample = tfIdfFromDoc doc1 twoGrams twoGramsIdf
 
 (**
-# Word bar chart
+# Word bar chart - Doc1
 *)
 
-/// Testing on entire sample
-let allDocs = training |> Seq.map snd |> Seq.toArray
-let myIdfMap = idf allDocs twoGrams
-
-let tfIdfDoc = tfIdf doc1 twoGrams myIdfMap
-
 let lowTfIdfWords = 
-    tfIdfDoc
+    tfIdfDoc1FullSample
     |> Seq.sortBy (fun xs -> xs.TfIdf)
     |> Seq.take 25
+    |> Seq.sortByDescending (fun xs -> xs.TfIdf)
     |> Seq.toArray
 
 let highTfIdfWords = 
-    tfIdfDoc 
+    tfIdfDoc1FullSample 
     |> Seq.sortByDescending (fun xs -> xs.TfIdf)
     |> Seq.take 25
     |> Seq.toArray
@@ -468,44 +458,122 @@ let wordBarChart (words : TermFreqInverseDocFreq []) (title: string) =
     words
     |> Seq.map (fun xs -> xs.Term, xs.TfIdf)
     |> Seq.toArray
-    |> Chart.Bar
+    |> Chart.Column
     |> Chart.withTitle title
-    |> Chart.withSize (1000., 500.)
+    |> Chart.withSize (500., 750.)
 
 wordBarChart lowTfIdfWords "Low Tf-Idf words (Common and rare words)" |> Chart.Show
 wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 
 (**
-**Inverse document frequency (IDF)**
-Term *frequency* measures how prevalent a term is in a single document.
-
-But how common it is in the *entire* corpus we're mining?
-
-- A term should not be too *rare*
-- A term should not be too *common*
-
-The spareness of a term *t* is measured commonly by its **inverse document frequency**:
-
-- $IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
-
+# Tf-idf histogram
 *)
+
+/// TwoGrams
+let allDocsTwoGramsTfIdf = 
+    allDocs
+    |> Seq.collect (fun doc -> tfIdfFromDoc doc twoGrams twoGramsIdf)
+    |> Seq.toArray
+
+/// ThreeGrams
+let allDocsThreeGramsTfIdf = 
+    allDocs
+    |> Seq.collect (fun doc -> tfIdfFromDoc doc threeGrams threeGramsIdf)
+    |> Seq.toArray
+
+let description =
+    let heading = "Comments"
+    let description = 
+        "Very rare words do convey meaning, but their added computational cost in expanding 
+         the set of features that must be considered often exceeds their diagnostic value.
+         An approach that excludes both common and rare words and has proven very useful in practice 
+         is filtering by 'term frequency - inverse document frequency' (tf-idf).
+         A high weight in tf-idf is reached by a high term frequency (in the given document) and 
+         a low document frequency of the term in the whole collection of documents; 
+         the weights hence tend to filter out common terms."
+    ChartDescription.create heading description
+
+let tfIdfHistogram (termsWithTfIdf: TermFreqInverseDocFreq [])
+                   (description: ChartDescription)
+                   (title: string) =
+    termsWithTfIdf
+    |> Seq.map (fun xs -> xs.TfIdf)
+    // For vizualization purposes
+    |> Seq.filter (fun x -> x < 0.005)
+    |> Seq.toArray
+    |> Chart.Histogram
+    |> Chart.withTitle title
+    |> Chart.withX_AxisStyle "Term frequency - inverse document frequency"
+    |> Chart.withY_AxisStyle "Frequency"
+    |> Chart.WithDescription (description)
+    |> Chart.withSize (600., 600.)
+
+let twoGramsHist = tfIdfHistogram allDocsTwoGramsTfIdf description "2-Grams"
+Chart.Show twoGramsHist
 
 (**
-**Term Frequency Inverse document frequency TF-IDF**
-
-TF-IDF value is specific to a single document (*d*) whereas IDF depends on the entire corpus.
-
-$TF-IDF(t, d) = TF(t, d) * IDF(t)$
-
-Each document thus becomes a feature vector, and the corpus is the set of these feature vectors.
-This set can then be used in a data mining algorithm (naive bayes) for classification, clustering, or retrieval.
-
-A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
-the weights hence tend to filter out common terms.
-
+# Tf-Idf + NGrams Tokenizer
 *)
+
+let tfIdfNGramsTokenizer (tfIdfThresh : float)
+                         (inverseDocFreq: Map<string, InverseDocFreq>)
+                         (docTransformer: DocTransfromer) 
+                         (doc: string) = 
+    
+    let tdIdfofDoc = 
+        tfIdf doc docTransformer inverseDocFreq
+        |> Seq.map (fun xs -> xs.Term, xs)
+        |> Seq.toArray
+        |> Map.ofArray
+    
+    doc
+    |> docTransformer
+    |> Seq.distinct
+    // TfIdfFilter
+    |> Seq.choose (fun term -> 
+    match Map.tryFind term tdIdfofDoc with 
+    | Some term -> if term.TfIdf > tfIdfThresh then Some (term.Term) else None
+    | _ -> None)
+    |> Set.ofSeq
 
 (**
-# To-do
-- TfIdf by NGrams Tokenizer
+# Tokenizer evaluation
+
+## Simple Tokenizer (Regex single word)
 *)
+
+/// Evaluate simple tokenizer -> 0.7126 (Cumulative return threshold -> abs 0.05)
+let allTokens = applyTokenizer tokenizeAllWords
+evaluate tokenizeAllWords allTokens
+
+(**
+## NGrams Tokenizer
+*)
+
+/// Evaluate TwoGrams -> 0.7480 (Cumulative return threshold -> abs 0.5)
+let twoGramsTokens = applyTokenizer twoGramsTokenizer
+evaluate twoGramsTokenizer twoGramsTokens
+
+/// Evaluate ThreeGrams -> 0.7559 (Cumulative return threshold -> abs 0.5)
+let threeGramsTokens = applyTokenizer threeGramsTokenizer
+evaluate threeGramsTokenizer threeGramsTokens
+
+(**
+# Tf-Idf + NGrams Tokenizer
+*)
+
+/// Evaluate TfIdf + twoGrams Tokenizer ->  0.7756 (Cumulative return threshold -> abs 0.5, TfIdfThesh = 0.0005)
+let twoGramsTransformer = nGrams 2
+let trainingTwoGramsIdf = idf allDocs twoGramsTransformer
+let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer 0.0005 trainingTwoGramsIdf twoGramsTransformer
+
+let tfIdfTwoGramsTokens = applyTokenizer tfIdfTwoGramsTokenzier
+evaluate tfIdfTwoGramsTokenzier tfIdfTwoGramsTokens
+
+/// Evaluate TfIdf + threeGrams Tokenizer ->   (Cumulative return threshold -> abs 0.5, TfIdfThresh = 0.0005)
+let threeGramsTransformer = nGrams 3
+let trainingThreeGramsIdf = idf allDocs threeGramsTransformer
+let tfIdfThreeGramsTokenzier = tfIdfNGramsTokenizer 0.0001 trainingThreeGramsIdf threeGramsTransformer
+
+let tfIdfThreeGramsTokens = applyTokenizer tfIdfThreeGramsTokenzier
+evaluate tfIdfThreeGramsTokenzier tfIdfThreeGramsTokens  
