@@ -287,7 +287,7 @@ let onylWords (word: string): option<Match> =
     let candidateMatch = onlyWordsRegex.Match word
     if candidateMatch.Success then Some (candidateMatch) else None
 
-let nGrams (n: int) (text: string): string [] = 
+let nGrams (n: int) (text: string): string[] = 
     text.Split(" ")
     |> Seq.windowed n
     |> Seq.map (fun words -> 
@@ -491,6 +491,7 @@ let description =
          A high weight in tf-idf is reached by a high term frequency (in the given document) and 
          a low document frequency of the term in the whole collection of documents; 
          the weights hence tend to filter out common terms."
+
     ChartDescription.create heading description
 
 let tfIdfHistogram (termsWithTfIdf: TermFreqInverseDocFreq [])
@@ -509,7 +510,12 @@ let tfIdfHistogram (termsWithTfIdf: TermFreqInverseDocFreq [])
     |> Chart.withSize (600., 600.)
 
 let twoGramsHist = tfIdfHistogram allDocsTwoGramsTfIdf description "2-Grams"
+let threeGramsHist = tfIdfHistogram allDocsThreeGramsTfIdf description "3-Grams"
+
 Chart.Show twoGramsHist
+Chart.Show threeGramsHist
+
+twoGramsHist |> Chart.SaveHtmlAs "data-cache/2GramsHist"
 
 (**
 # Tf-Idf + NGrams Tokenizer
@@ -560,6 +566,8 @@ evaluate threeGramsTokenizer threeGramsTokens
 
 (**
 # Tf-Idf + NGrams Tokenizer
+
+- Threshold -> Hyperparameter ? 
 *)
 
 /// Evaluate TfIdf + twoGrams Tokenizer ->  0.7756 (Cumulative return threshold -> abs 0.5, TfIdfThesh = 0.0005)
@@ -570,10 +578,14 @@ let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer 0.0005 trainingTwoGramsIdf two
 let tfIdfTwoGramsTokens = applyTokenizer tfIdfTwoGramsTokenzier
 evaluate tfIdfTwoGramsTokenzier tfIdfTwoGramsTokens
 
-/// Evaluate TfIdf + threeGrams Tokenizer ->   (Cumulative return threshold -> abs 0.5, TfIdfThresh = 0.0005)
+/// Evaluate TfIdf + threeGrams Tokenizer ->  0.6923 (Cumulative return threshold -> abs 0.5, TfIdfThresh = 0.0008)
 let threeGramsTransformer = nGrams 3
 let trainingThreeGramsIdf = idf allDocs threeGramsTransformer
-let tfIdfThreeGramsTokenzier = tfIdfNGramsTokenizer 0.0001 trainingThreeGramsIdf threeGramsTransformer
+let tfIdfThreeGramsTokenzier = tfIdfNGramsTokenizer 0.001 trainingThreeGramsIdf threeGramsTransformer
 
 let tfIdfThreeGramsTokens = applyTokenizer tfIdfThreeGramsTokenzier
-evaluate tfIdfThreeGramsTokenzier tfIdfThreeGramsTokens  
+evaluate tfIdfThreeGramsTokenzier tfIdfThreeGramsTokens
+
+(**
+## Positive, Negative words analysis
+*)
