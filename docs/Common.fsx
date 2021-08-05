@@ -1,5 +1,5 @@
 #r "nuget: FSharp.Data"
-#load "/Users/antonioelias/Desktop/Nova SBE Modules/Data Analytics for Finance/secrets.fsx"
+#load "C:\Users\Five star\Documents\GitHub\ConferenceCalls\Secrets.fsx"
 
 open System
 open System.IO

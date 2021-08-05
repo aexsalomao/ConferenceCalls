@@ -1,5 +1,25 @@
 (**
-# Earnings call classification
+# Classifying earnings call transcripts with Naive Bayes
+*)
+
+(**
+In the `TranscriptParsing.fsx` script, together with dowloading company specific earnings call transcripts, 
+we also downloaded each company's ticker, exchange and the exact date and time of each earnings call. 
+With this information, we were able to use Tiingo to fetch end-of-day price data for the company's ticker around the date of the earnings call.
+To be more precise, end-of-day closing prices were fetched from a three-day window period. Why with a three-day window?
+
+Since earnings announcements are known to have an impact on market prices, 
+we have to be careful when computing returns as we are computing returns from **end-of-day** prices. 
+While some calls might happen before or during market hours, some calls happen after market hours and so we have to be careful when computing cumualtive returns.
+
+What we want is to fetch 3 closing prices: (1) the last closing price prior to the call (2) the closing price 
+after the call took place (normally the most impactful one) and finally (3) the closing price after the day of the call
+ 
+- If the call had occured before or even during market hours, say the call happened at 11AM ET on a Tuesday, we would fetch Monday's, Tuesday's, and Wednesday's end-of-day closing prices.
+- Likewise, if the call had occured after market hours, say the call happened at 7PM on a Tuesday, we would fetch Tuesday's, Wedneday's, and Thursday's end-of-day closing prices.
+
+From these price observations, we can compute the total return or cumualtive return of a specific company around its earnings announcement, 
+and then use this return as a signal to classify the market's view of the company's lastest earnings announcement.
 *)
 
 (**
@@ -7,31 +27,39 @@
 *)
 
 #r "nuget: FSharp.Data"
-#r "nuget: FSharp.Stats"
 #r "nuget: Newtonsoft.Json"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 #r "nuget: FSharp.Collections.ParallelSeq"
 
-#load "TranscriptParsing.fsx"
-#load "ReturnsAroundCall.fsx" 
+/// #load "TranscriptParsing.fsx"
+/// #load "ReturnsAroundCall.fsx" 
 
 open System
 open System.Text.RegularExpressions
 open FSharp.Data
-open FSharp.Stats
 open Newtonsoft.Json
 open Plotly.NET
 open FSharp.Collections.ParallelSeq
 
-open TranscriptParsing
-open ReturnsAroundCall
+/// open TranscriptParsing
+/// open ReturnsAroundCall
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
-## Read transcripts
+## Read transcripts from json file
 *)
+
+type Transcript = 
+    {Ticker : string
+     Exchange: string
+     Date : DateTime
+     Paragraphs : string []}
+
+type AnnouncementDayReturn = 
+    { Transcript : Transcript
+      CumulativeReturn : float}
 
 let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
@@ -39,11 +67,16 @@ let readJson (jsonFile: string) =
 
 let rawDataset = 
     readJson ("data-cache/ReturnsAroundCall2500.json") 
+    |> Seq.take 100
     |> Seq.toArray
 
 (**
-##  Analyze paraphrahs
-Some paragraphs are longer than others, and some "paragraphs" aren't even real paragraphs. One-liners like opening and closing remarks add noise to our text dataset and should be removed. 
+# Analyzing paragraphs
+*)
+
+(***
+Some paragraphs are longer than others, and some paragraphs aren't even real paragraphs. 
+One-liners like opening and closing remarks add noise to our dataset and should be taken care of.
 *)
 
 let shortParagraphs = 
@@ -71,11 +104,8 @@ let histogramParagraphLength =
     |> Chart.withSize(500., 500.)
 
 /// Chart.Show histogramParagraphLength
-
 (**
 # Labeled Transcript
-
-Lets add a bit more structure to our data and label each transcript according to the market's price reaction. Since we are working with daily data we want to be careful to label market reactions correctly and 
 *)
 
 type Label = 
@@ -89,7 +119,6 @@ type LabeledTranscript =
      CumulativeReturn: float
      Transcript : string}
 
-/// Label transcript according to a cumulative return threshold
 let parseLabel (cumRet: float): Label = 
     let threshold = 0.05
     if cumRet > threshold then 
@@ -99,13 +128,11 @@ let parseLabel (cumRet: float): Label =
     else
         Neutral
 
-/// Reduce noise to signal ratio by removing short paragrahs
 let removeShortParagraphs (paragraphs: string []): string =
     paragraphs
     |> Seq.filter (fun p -> p.Length > 100)
     |> String.concat (" ")
 
-///  Construct LabeledTranscript record
 let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
     dataset
     |> Seq.map (fun xs ->
@@ -121,12 +148,7 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
 
     |> Seq.toArray
 
-/// Labeled transcripts
 let myTranscripts: LabeledTranscript [] = labelDataset rawDataset
-
-myTranscripts
-|> Seq.take 3
-|> Seq.iter (fun xs -> printfn $"{xs.TickerExchange}, {Math.Round (xs.CumulativeReturn, 4)}, {xs.Label}, {xs.Transcript.[..30]} ... ")
 
 (**
 ## Analyze dataset
@@ -135,10 +157,8 @@ myTranscripts
 type LabelSummary = 
     { Label : Label
       Count : int
-      AvgRet : float
-      StDevRet : float}
+      AvgCumRet : float }
 
-/// Label's summary statistics
 let analyzeLabel (label: Label): LabelSummary = 
     let rets = 
         myTranscripts 
@@ -147,23 +167,14 @@ let analyzeLabel (label: Label): LabelSummary =
         |> Seq.toArray
     
     let count = rets.Length
-    let avgRet = Array.average rets
-    let stDevRet = stDev rets
+    let avgCumRet = Math.Round (Array.average rets, 4)
       
     { Label = label
       Count = count
-      AvgRet = avgRet
-      StDevRet = stDevRet }
-
-myTranscripts
-|> Seq.map (fun xs -> xs.Label)
-|> Seq.distinct
-|> Seq.map analyzeLabel
-|> Seq.toArray
-
+      AvgCumRet = avgCumRet}
 
 (**
-## Histogram: Cumulative returns
+## Cumulative returns, histogram
 *)
 
 let retsByLabel (label: Label) = 
@@ -172,10 +183,6 @@ let retsByLabel (label: Label) =
     |> Seq.map (fun xs -> xs.CumulativeReturn)
     |> Seq.toArray
 
-let returnsDescription = 
-    "Cumulative returns were computed from a three-day window ..."
-    |> ChartDescription.create "Description"
-   
 let returnsDistribution =
     myTranscripts
     |> Seq.map (fun xs -> xs.Label)
@@ -183,19 +190,15 @@ let returnsDistribution =
     |> Seq.map (fun label -> 
         let labelStats = analyzeLabel label
         Chart.Histogram (data = retsByLabel label, 
-                         Name = $"{labelStats.Label} (N = {labelStats.Count} | Avg. = {Math.Round (labelStats.AvgRet, 4)} | Stdev. = {Math.Round (labelStats.StDevRet, 4)})"))
+                         Name = $"{labelStats.Label} (N = {labelStats.Count}, Avg. = {labelStats.AvgCumRet})"))
     |> Seq.toArray
     |> Chart.Combine
-    |> Chart.withTitle "Cumulative returns"
-    |> Chart.WithDescription returnsDescription
+    |> Chart.withTitle "Histogram: Cumulative returns"
     |> Chart.withSize (1000., 500.)
 
 /// Chart.Show returnsDistribution
-
 (**
 # Naive Bayes Module
-
-- Source: ML Project for .NET Developers - Chapter 2: Spam or Ham <a href ="https://github.com/mathias-brandewinder/machine-learning-projects-for-dot-net-developers/tree/master/chapter-2/SpamOrHam", target = "_blank">GitHub</a>
 *)
 
 type Token = string
@@ -281,12 +284,12 @@ let training, validation =
         |> Seq.map (fun xs -> (xs.Label, xs.Transcript))
         |> Seq.toArray
 
-    let cutoff = (float posOrNeg.Length) * 0.9 |> int
+    let cutoff = (float posOrNeg.Length) * 0.8 |> int
 
     posOrNeg.[.. cutoff], posOrNeg.[cutoff + 1 ..]
 
 (**
-## Simple Tokenizer
+## Tokenizer
 *)
 
 let vocabulary (tokenizer: Tokenizer) (corpus: string seq) = 
@@ -412,10 +415,8 @@ let idf (docs : string [])
 (**
 ## Term frequency - Inverse Document Frequency
 $TF-IDF(t, d) = TF(t, d) * IDF(t)$
-
 A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
 the weights hence tend to filter out common terms.
-
 *)
 
 type TermFreqInverseDocFreq = 
@@ -584,7 +585,6 @@ let tfIdfNGramsTokenizer (tfIdfThresh : float)
 
 (**
 # Tokenizer evaluation
-
 ## Simple Tokenizer (Regex single word)
 *)
 
@@ -606,7 +606,6 @@ evaluate threeGramsTokenizer threeGramsTokens
 
 (**
 # Tf-Idf + NGrams Tokenizer
-
 - Threshold -> Hyperparameter ? 
 *)
 

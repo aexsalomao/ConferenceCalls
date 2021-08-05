@@ -191,11 +191,19 @@ findTime teslaDoc
 Now that we have working functions for both the date and time of each call, lets combine these functions together and convert the information we have on the date and time of an earnings call to a <a href="https://docs.microsoft.com/en-us/dotnet/api/system.datetime?view=net-5.0" target="_blank">DateTime struct</a> :
 *)
 
-// DateTime converter
+/// DateTime converter
 let convertToDateTime (dateExpr: string): DateTime =
     let dateFormat = "MMM d yyyy h:mm tt"
-    DateTime.ParseExact(dateExpr, dateFormat, System.Globalization.CultureInfo.CurrentCulture)
+    DateTime.ParseExact(dateExpr, dateFormat, System.Globalization.CultureInfo.InvariantCulture)
 
+/// Search for and match date and time
+let findDateTime (doc: TranscriptDocument): option<DateTime> =
+    match findDate doc, findTime doc with
+    | Some date, Some time -> 
+        $"{date} {time}" |> convertToDateTime |> Some 
+    | _ -> None
+
+/// Use of active patterns
 let (|Date|_|) (doc:TranscriptDocument) = findDate doc
 let (|Time|_|) (doc:TranscriptDocument) = findTime doc
 let (|DateAndTime|_|) (doc:TranscriptDocument) = 
@@ -206,24 +214,15 @@ let (|DateAndTime|_|) (doc:TranscriptDocument) =
         |> Some
     | _ -> None
 
-// Search for and match date and time
-let findDateTime (doc: TranscriptDocument): option<DateTime> =
-    match findDate doc, findTime doc with
-    | Some date, Some time -> 
-        $"{date} {time}" |> convertToDateTime |> Some 
-    | _ -> None
-
 let findDateTime2 (doc: TranscriptDocument): option<DateTime> =
     match doc with
     | Date date & Time time -> Some ($"{date} {time}" |> convertToDateTime) 
     | _ -> None
 
-
 let findDateTime3 (doc: TranscriptDocument): option<DateTime> =
     match doc with 
     | DateAndTime dt -> Some dt
     | _ -> None
-
 
 /// Tesla call DateTime
 findDateTime teslaDoc
