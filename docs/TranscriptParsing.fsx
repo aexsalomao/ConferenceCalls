@@ -208,8 +208,9 @@ let (|DateAndTime|_|) (doc:TranscriptDocument) =
 
 // Search for and match date and time
 let findDateTime (doc: TranscriptDocument): option<DateTime> =
-    match (doc |> findDate), (doc |> findTime) with
-    | Some date, Some time -> Some ($"{date} {time}" |> convertToDateTime) 
+    match findDate doc, findTime doc with
+    | Some date, Some time -> 
+        $"{date} {time}" |> convertToDateTime |> Some 
     | _ -> None
 
 let findDateTime2 (doc: TranscriptDocument): option<DateTime> =
