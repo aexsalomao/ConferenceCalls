@@ -12,9 +12,12 @@ index: 1
 *)
 
 (**
-The objective of this `TranscriptParsing.fsx` script is to give a few examples on how to parse html documents with F#. More specifically, we will be attempting to parse earnings call transcripts from <a href="https://www.fool.com" target="_blank">Motley Fool</a>.
+The objective of this `TranscriptParsing.fsx` script is to give a few examples
+on how to parse html documents with F#. More specifically, we will be attempting
+to parse earnings call transcripts from [Motley Fool](https://www.fool.com).
 
-Before getting started, lets download the <a href="https://fsprojects.github.io/FSharp.Data/" target="_blank">Fsharp Data</a> package using .NET's package manager <a href="https://www.nuget.org/" target="_blank">NuGet</a>:
+Before getting started, lets download the [FSharp.Data](https://fsprojects.github.io/FSharp.Data/)
+nuget package using .NET's package manager [NuGet](https://www.nuget.org/packages/FSharp.Data/):
 *)
 
 #r "nuget: FSharp.Data"
@@ -26,11 +29,13 @@ open System
 
 (**
 ## Transcript - Url
-We can download or parse individual html documents with their url. Since each call transcript will have a different url, we need to find an effective and consistent way to fetch individual urls from motley fool's website. Fortunately, if we take a look at <a href="https://www.fool.com/earnings-call-transcripts/?page=1" target="_blank">motley fool's front page</a>, we see that all call transcripts are tagged with hyperlinks. 
-*)
+We can download or parse individual html documents with their url.
+Since each call transcript will have a different url, we need
+to find an effective and consistent way to fetch individual urls 
+from motley fool's website. Fortunately, if we take a look at <a href="https://www.fool.com/earnings-call-transcripts/?page=1" target="_blank">motley fool's front page</a>, we see that all call transcripts are tagged with hyperlinks. 
 
-(**
 <img src="FsdocsImages\motley_fool_front_page.png" width="70%" >
+
 *)
 
 (**
@@ -41,14 +46,19 @@ type FrontPageDocument = HtmlDocument
 
 /// Match html node with "href" attribute
 let tryHref (node: HtmlNode): string option =
-    match node.TryGetAttribute("href") with
-    | None -> None
-    | Some attrib -> Some ("https://www.fool.com" + attrib.Value())
+    let foolLink (attrib:HtmlAttribute) = $"https://www.fool.com{attrib.Value()}"
+    node.TryGetAttribute("href") |> Option.map foolLink
+
+let makeFoolUrl (attrib:HtmlAttribute) = 
+    match attrib.Name(), attrib.Value() with
+    | "href", stub -> $"https://www.fool.com{stub}"
+    | _, _ -> failwithf $"Expected href attribute but got {attrib}"
 
 /// Search for transcript urls
 let findTranscriptUrls (pageDoc: FrontPageDocument): string [] =  
     pageDoc.CssSelect("a[href^='/earnings/call-transcripts']")
-    |> Seq.choose tryHref
+    |> Seq.choose (HtmlNode.tryGetAttribute "href")
+    |> Seq.map makeFoolUrl
     |> Seq.toArray
     
 (** 
@@ -74,12 +84,12 @@ type TranscriptDocument = HtmlDocument
 
 /// Match inner text from html node to a ticker and exchange
 let tryTickerExchange (tickerInfo: string option): option<string * string> =
-    match tickerInfo with
-    | Some te -> 
-                 match te.Split(":") with
-                 |[|exchange; ticker|] -> Some (ticker, exchange)
-                 | _ -> None
-    | _ -> None
+    let split (te:string) =
+        match te.Split(":") with
+        |[|exchange; ticker|] -> Some (ticker, exchange)
+        | _ -> None
+
+    tickerInfo |> Option.map split |> Option.flatten
 
 /// Search for ticker and exchange
 let findTickerExchange (doc: TranscriptDocument): option<string * string> = 
@@ -92,10 +102,9 @@ let findTickerExchange (doc: TranscriptDocument): option<string * string> =
 
 (**
 Lets see if we can fetch Tesla's ticker and exchange from its <a href="https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/" target="_blank">latest earnings call</a>:
-*)
 
-(**
 <img src="FsdocsImages\tesla_motley_fool.png" width="70%">
+
 *) 
 
 /// Tesla transcript html document
@@ -120,7 +129,12 @@ We can use the `CssSelect` method to search for the exact date and time of the e
 
 /// Format date string
 let cleanDate (node: HtmlNode): option<string> = 
-    node.InnerText().ToUpperInvariant().Replace(".", "").Replace(",", "").Trim().Split(" ")
+    node.InnerText()
+        .ToUpperInvariant()
+        .Replace(".", "")
+        .Replace(",", "")
+        .Trim()
+        .Split(" ")
     |> fun dateArr ->     
         match dateArr with
         |[|month; day; year|] -> Some ($"{month.[..2]} {day} {year}") 
@@ -128,11 +142,9 @@ let cleanDate (node: HtmlNode): option<string> =
 
 /// Match html node with some date
 let tryDate (node: HtmlNode option): option<string> =
-    match node with
-    | None -> None 
-    | Some dateNode -> 
-        let cleanDate = (dateNode |> cleanDate)
-        if cleanDate.IsSome then Some (cleanDate.Value) else None
+    node
+    |> Option.map cleanDate
+    |> Option.flatten
 
 /// Search for transcript date
 let findDate (doc: TranscriptDocument): option<string>=
@@ -151,7 +163,10 @@ findDate teslaDoc
 
 /// Format time string
 let cleanTime (node: HtmlNode ) = 
-    node.InnerText().ToUpperInvariant().Replace(".", "").Replace("ET", "").Trim()
+    let txt = node.InnerText().ToUpperInvariant().Replace(".", "")
+    if (txt.Contains "ET")
+    then txt.Replace("ET", "").Trim()
+    else failwithf $"Expected ET timezone but got {txt}"
 
 /// Match html node with some time
 let tryTime (node: HtmlNode option): option<string> =
@@ -181,14 +196,38 @@ let convertToDateTime (dateExpr: string): DateTime =
     let dateFormat = "MMM d yyyy h:mm tt"
     DateTime.ParseExact(dateExpr, dateFormat, System.Globalization.CultureInfo.CurrentCulture)
 
+let (|Date|_|) (doc:TranscriptDocument) = findDate doc
+let (|Time|_|) (doc:TranscriptDocument) = findTime doc
+let (|DateAndTime|_|) (doc:TranscriptDocument) = 
+    match doc with
+    | Date date & Time time -> 
+        $"{date} {time}"
+        |> convertToDateTime
+        |> Some
+    | _ -> None
+
 // Search for and match date and time
 let findDateTime (doc: TranscriptDocument): option<DateTime> =
     match (doc |> findDate), (doc |> findTime) with
     | Some date, Some time -> Some ($"{date} {time}" |> convertToDateTime) 
     | _ -> None
 
+let findDateTime2 (doc: TranscriptDocument): option<DateTime> =
+    match doc with
+    | Date date & Time time -> Some ($"{date} {time}" |> convertToDateTime) 
+    | _ -> None
+
+
+let findDateTime3 (doc: TranscriptDocument): option<DateTime> =
+    match doc with 
+    | DateAndTime dt -> Some dt
+    | _ -> None
+
+
 /// Tesla call DateTime
 findDateTime teslaDoc
+findDateTime2 teslaDoc
+findDateTime3 teslaDoc
 
 (*** include-it ***)
 
@@ -310,6 +349,5 @@ let TranscriptsToJson (fileName: string) (transcripts: Transcript []) =
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
-(*
-TranscriptsToJson (async1to10, "data-cache/Motley100.json")
-*)
+(*** do-not-eval***)
+TranscriptsToJson "data-cache/Motley100.json" async1to10
