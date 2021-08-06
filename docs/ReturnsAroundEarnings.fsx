@@ -60,7 +60,7 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 *)
 
 (**
-Read data that was dowloaded from `TranscriptParsing.fsx`. 
+Read data that was dowloaded using `TranscriptParsing.fsx`. 
 *)
 
 /// Reading JSON
@@ -159,6 +159,54 @@ let spyReturnsMap =
 (**
 ## Returns Around Earnings Announcements
 *)
+
+let exampleTranscriptA = 
+    myTranscripts |> Seq.head
+
+let windowedSp = 
+    samplePeriodReturns "SPY"
+    |> fun rets ->
+    match rets with
+    | Some rets -> 
+        let windowedRets = rets |> Array.windowed 3
+        Some (windowedRets)
+
+let windowedSpy = 
+    "SPY"
+    |> samplePeriodReturns
+    |> fun xs -> 
+    xs.Value 
+    |> Array.windowed 3
+    |> Array.map (fun xs -> 
+        let dates = xs |> Array.map (fun xs -> xs.Date)
+        dates, xs)
+    |> Map.ofArray
+
+let windowedTranscript = 
+    exampleTranscriptA.Ticker
+    |> samplePeriodReturns
+    |> fun xs -> 
+    xs.Value 
+    |> Array.windowed 3
+
+let overLappingDates = 
+    windowedTranscript
+    |> Seq.choose (fun retObs -> 
+    let stockDates = retObs |> Array.map (fun xs -> xs.Date)
+    let spyObs = Map.tryFind stockDates windowedSpy
+    match spyObs with
+    | Some [|spyObs1; spyObs2; spyObs3|] when spyObs2.Date = DateTime(2021, 07, 28) -> Some [|spyObs1; spyObs2; spyObs3|]                               
+    | _ -> None)
+    |> Seq.tryExactlyOne
+    |> fun xs -> 
+    match xs with
+    | Some xs -> Some (xs |> Seq.map (fun xs -> xs.Date, xs) |> Seq.toArray)
+    | None -> None
+
+
+windowedSpy
+
+
 
 (**
 ### Two-week return window
