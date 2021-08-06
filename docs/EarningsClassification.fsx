@@ -3,26 +3,6 @@
 *)
 
 (**
-In the `TranscriptParsing.fsx` script, together with dowloading company specific earnings call transcripts, 
-we also downloaded each company's ticker, exchange and the exact date and time of each earnings call. 
-With this information, we were able to use Tiingo to fetch end-of-day price data for the company's ticker around the date of the earnings call.
-To be more precise, end-of-day closing prices were fetched from a three-day window period. Why with a three-day window?
-
-Since earnings announcements are known to have an impact on market prices, 
-we have to be careful when computing returns as we are computing returns from **end-of-day** prices. 
-While some calls might happen before or during market hours, some calls happen after market hours and so we have to be careful when computing cumualtive returns.
-
-What we want is to fetch 3 closing prices: (1) the last closing price prior to the call (2) the closing price 
-after the call took place (normally the most impactful one) and finally (3) the closing price after the day of the call
- 
-- If the call had occured before or even during market hours, say the call happened at 11AM ET on a Tuesday, we would fetch Monday's, Tuesday's, and Wednesday's end-of-day closing prices.
-- Likewise, if the call had occured after market hours, say the call happened at 7PM on a Tuesday, we would fetch Tuesday's, Wedneday's, and Thursday's end-of-day closing prices.
-
-From these price observations, we can compute the total return or cumualtive return of a specific company around its earnings announcement, 
-and then use this return as a signal to classify the market's view of the company's lastest earnings announcement.
-*)
-
-(**
 ## Import packages and load scripts
 *)
 
@@ -74,7 +54,7 @@ let rawDataset =
 # Analyzing paragraphs
 *)
 
-(***
+(**
 Some paragraphs are longer than others, and some paragraphs aren't even real paragraphs. 
 One-liners like opening and closing remarks add noise to our dataset and should be taken care of.
 *)
