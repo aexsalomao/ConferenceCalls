@@ -299,6 +299,7 @@ let asyncTranscript (url: string) =
 
 let asyncPage (n: int) = 
     async {
+        printfn $"{n}"
         let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}" 
         let! pageDoc = HtmlDocument.AsyncLoad frontPageP
 
@@ -319,35 +320,40 @@ let asyncPage (n: int) =
 
 (**
 ### Parse Transcript Pages
-*)
+let async1to50 = 
+    [1 .. 50]
+    |> Seq.map asyncPage
+    |> fun xs -> Async.Parallel(xs, 5)
+    |> Async.RunSynchronously
+    |> Array.collect Seq.toArray
 
-let async1to10 = 
-    [1 .. 10]
+let async1to50 = 
+    [1 .. 50]
     |> Seq.map asyncPage
     |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
 
 /// Total number of transcripts
-printfn $"N: {async1to10.Length}"
+printfn $"N: {async1to50.Length}"
 
 (*** include-output ***)
 
 /// First three transcripts
-async1to10
+async1to50
 |> Array.take 3
 |> Array.iter (fun transcript -> 
     printfn $" Datetime: {transcript.Date} --- Ticker, Exchange: {transcript.Ticker}, {transcript.Exchange}")
 
 (*** include-output ***)
 
-(**
 ### Export to json
-*)
 
 let TranscriptsToJson (fileName: string) (transcripts: Transcript []) = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-/// TranscriptsToJson "data-cache/Motley100.json" async1to10
+TranscriptsToJson "data-cache/Motley50.json" async1to50
+
+*)

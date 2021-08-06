@@ -17,9 +17,6 @@
 open System
 open System.Text.RegularExpressions
 open FSharp.Data
-open Newtonsoft.Json
-open Plotly.NET
-open FSharp.Collections.ParallelSeq
 
 /// open TranscriptParsing
 /// open ReturnsAroundCall

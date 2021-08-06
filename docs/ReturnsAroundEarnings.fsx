@@ -70,7 +70,8 @@ let readJson (jsonFile: string) =
 
 /// Data
 let myTranscripts = 
-    readJson ("data-cache/Motley100.json")
+    readJson ("data-cache/Motley50.json")
+    |> Seq.rev
     |> Seq.toArray
 
 myTranscripts.Length
@@ -90,17 +91,6 @@ let callsByTimeOfDay (transcripts : Transcript []) =
 
 /// myTranscripts |> callsByTimeOfDay |> Chart.Show
 
-let callsByDayofWeek (transcripts: Transcript []) = 
-    transcripts
-    |> Seq.countBy (fun x -> x.Date.DayOfWeek, x.Date.DayOfWeek.ToString())
-    |> Seq.sortBy fst
-    |> Seq.map(fun ((dayInt, dayString), count) -> dayString, count )
-    |> Chart.Column
-    |> Chart.withTitle $"Earnings Calls by day of week (N: {Seq.length transcripts})"
-    |> Chart.withY_AxisStyle "Count"
-
-/// myTranscripts |> callsByDayofWeek |> Chart.Show
-
 (**
 ## Tiingo returns
 *)
@@ -119,19 +109,21 @@ let tiingoReturns (tiingoStart: DateTime)
     |> Tiingo.startOn tiingoStart
     |> Tiingo.endOn tiingoEnd
     |> Tiingo.getReturns
-    |> fun tiingoRets ->
-    match tiingoRets with
+    |> fun rets ->
+    match rets with
     | [||] -> None
-    | _ -> Some (tiingoRets)
+    | _ -> Some rets
 
 /// Returns map
 let returnsMap (rets: ReturnObs [] option) = 
     match rets with
-    | Some rets -> 
+    | Some rets ->
+        let retsMap = 
             rets 
             |> Seq.map (fun xs -> xs.Date, xs) 
             |> Map.ofSeq
-    | None -> failwith "No returns found to Map"
+        Some (retsMap)
+    | None -> None
 
 (**
 ### Use of partial application
@@ -151,68 +143,17 @@ let startSample, endSample =
 let samplePeriodReturns = tiingoReturns startSample endSample
 
 /// SP500
-let spyReturnsMap = 
-    "SPY"
-    |> samplePeriodReturns
-    |> returnsMap
-   
+let spyObs = samplePeriodReturns "SPY"
+
 (**
 ## Returns Around Earnings Announcements
 *)
-
-let exampleTranscriptA = 
-    myTranscripts |> Seq.head
-
-let windowedSp = 
-    samplePeriodReturns "SPY"
-    |> fun rets ->
-    match rets with
-    | Some rets -> 
-        let windowedRets = rets |> Array.windowed 3
-        Some (windowedRets)
-
-let windowedSpy = 
-    "SPY"
-    |> samplePeriodReturns
-    |> fun xs -> 
-    xs.Value 
-    |> Array.windowed 3
-    |> Array.map (fun xs -> 
-        let dates = xs |> Array.map (fun xs -> xs.Date)
-        dates, xs)
-    |> Map.ofArray
-
-let windowedTranscript = 
-    exampleTranscriptA.Ticker
-    |> samplePeriodReturns
-    |> fun xs -> 
-    xs.Value 
-    |> Array.windowed 3
-
-let overLappingDates = 
-    windowedTranscript
-    |> Seq.choose (fun retObs -> 
-    let stockDates = retObs |> Array.map (fun xs -> xs.Date)
-    let spyObs = Map.tryFind stockDates windowedSpy
-    match spyObs with
-    | Some [|spyObs1; spyObs2; spyObs3|] when spyObs2.Date = DateTime(2021, 07, 28) -> Some [|spyObs1; spyObs2; spyObs3|]                               
-    | _ -> None)
-    |> Seq.tryExactlyOne
-    |> fun xs -> 
-    match xs with
-    | Some xs -> Some (xs |> Seq.map (fun xs -> xs.Date, xs) |> Seq.toArray)
-    | None -> None
-
-
-windowedSpy
-
-
 
 (**
 ### Two-week return window
 *)
 
-(***
+(**
 Since we are not working with an external database that contains all trading calendar days ...
 *)
 
@@ -221,65 +162,92 @@ type ReturnsWindow =
       ReturnsAroundEarnings : ReturnObs [] }
 
 /// Two weeks return window
-let twoWeekReturns (transcript: Transcript): ReturnsWindow option = 
+let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option = 
     let minusOneWeek, plusOneWeek = 
         transcript.Date 
         |> fun date -> date.AddDays(-7.0), date.AddDays(7.0)
     
-    let twoWeekRets = tiingoReturns minusOneWeek plusOneWeek
+    let twoWeekTiingoRets = tiingoReturns minusOneWeek plusOneWeek
 
-    match twoWeekRets transcript.Ticker with
+    match twoWeekTiingoRets transcript.Ticker with
     | None -> None
-    | Some rets -> Some ({ Transcript = transcript
-                           ReturnsAroundEarnings = rets })
-
-/// Example transcript
-let exampleTranscript = Seq.head myTranscripts
-exampleTranscript.Date
-twoWeekReturns exampleTranscript
+    | Some rets -> Some { Transcript = transcript
+                          ReturnsAroundEarnings = rets }
 
 (**
-### Three-day return window
+### First observed return after earnings call
 *)
 
-/// First observed return after the earnings call
-let afterCallReturn (obs: ReturnsWindow): ReturnObs option =
-    let dayOfCall = 
+/// Find first observed return
+let firstReturnAfterCall (obs: ReturnsWindow): ReturnObs option =
+     
+    let dateOfCall = 
         obs.Transcript.Date
         |> fun date -> if date.Hour < 16 then date else date.AddDays(1.0)
-    obs.ReturnsAroundEarnings 
-    |> Seq.tryFind (fun xs -> xs.Date.Date >= dayOfCall)
-
-/// Filter for observations with dates that match SPYs dates
-let spyReturnsFilter (obs: ReturnsWindow) = 
+    
     obs.ReturnsAroundEarnings
-    |> Array.filter (fun xs -> Map.containsKey xs.Date spyReturnsMap)
+    |> Seq.tryFind (fun xs -> xs.Date.Day >= dateOfCall.Day)
 
-/// Find Three-day returns
-let threeDayReturns (obs: ReturnsWindow option): ReturnsWindow option =
-    match obs with
-    | None -> None
-    | Some obs -> 
-        let afterCallReturn = afterCallReturn obs
-        obs
-        |> spyReturnsFilter
-        |> Array.windowed 3
-        |> Array.filter (fun xs ->
-                         let threeDayWindow = xs |> Array.map (fun xs -> xs.Date)
-                         match afterCallReturn, threeDayWindow with
-                         | Some retObs, [|d1; d2; d3|] -> retObs.Date = d2.Date.Date
-                         | _ -> failwith "why don't you have 3 items?")
-                         |> Array.tryExactlyOne
-                         |> fun rets -> 
-                         match rets with
-                         | None -> None
-                         | Some rets ->
-                            Some { Transcript = obs.Transcript
-                                   ReturnsAroundEarnings = rets }
+(**
+### Three-day window
+*)
+
+let findThreeDays (rets: ReturnObs []) 
+                  (middleRet: ReturnObs): ReturnObs [] option = 
+    rets
+    |> Seq.windowed 3
+    |> Seq.choose (fun retWindow ->
+                   let dates = retWindow |> Array.map (fun rets -> rets.Date)
+                   match dates with
+                   | [|d1; d2; d3|] when d2.Day = middleRet.Date.Day -> Some (retWindow)
+                   | _ -> None)
+    |> Seq.tryExactlyOne
 
 (**
 ### Adjusted returns
 *)
+
+let threeDayAdjustedReturns (transcript: Transcript): ReturnsWindow option =
+
+    /// Check if Tiingo is returning data
+    match spyObs, 
+          twoWeekReturnWindow transcript with
+    | Some spyObs, 
+      Some stockObs ->
+
+      /// Find first observed return after call
+        match firstReturnAfterCall stockObs with
+        | Some firstRet ->
+
+        /// Find three-day window
+            match  findThreeDays spyObs firstRet, 
+                   findThreeDays stockObs.ReturnsAroundEarnings firstRet with              
+            | Some spyWindow, 
+              Some stockWindow ->
+
+            /// Compute excess returns from SPY
+                let adjustedReturns = 
+             
+                    let spyWindowMap = 
+                        spyWindow 
+                        |> Array.map (fun xs -> xs.Date, xs) 
+                        |> Map.ofArray
+
+                    stockWindow
+                    |> Array.choose 
+                        (fun stockRet ->
+                         match Map.tryFind stockRet.Date spyWindowMap with
+                         | Some spyRet -> 
+                            let adjRet = stockRet.Return - spyRet.Return 
+                            Some { Symbol = stockRet.Symbol
+                                   Date = stockRet.Date
+                                   Return = adjRet}
+                         | None -> None)
+                Some { Transcript = transcript
+                       ReturnsAroundEarnings = adjustedReturns }
+            | _ -> None
+        |_ -> None   
+    | _ -> None
 
 (**
 ### Cumulative returns
@@ -289,31 +257,27 @@ type AnnouncementDayReturn =
     { Transcript : Transcript
       CumulativeReturn : float }
 
-let cumulativeReturns (obs: ReturnObs []) =     
-    (1.0, obs)
-    ||> Array.fold (fun acc x -> acc*(1.0+ x.Return))
-    |> fun xs -> xs - 1.
-    
-let adjustedCumulativeReturns (obs: ReturnsWindow option) =
-    match obs with 
+let cumulativeReturns (obs: ReturnsWindow option): AnnouncementDayReturn option = 
+    match obs with
+    | Some obs ->     
+        (1.0, obs.ReturnsAroundEarnings)
+        ||> Array.fold (fun acc x -> acc*(1.0+ x.Return))
+        |> fun xs -> 
+            let cumRet = xs - 1.
+            Some { Transcript = obs.Transcript
+                   CumulativeReturn = cumRet}
     | None -> None
-    | Some retWindow ->
-        let cumRet = cumulativeReturns retWindow.ReturnsAroundEarnings
-        Some { Transcript = retWindow.Transcript
-               CumulativeReturn = cumRet}
 
-
-let transcriptA = myTranscripts |> Array.rev |> Seq.head
-
-
-transcriptA
-
-let getReturnsAroundAnnouncement (obs: Transcript) =
+let getReturnsAroundAnnouncement (obs: Transcript): AnnouncementDayReturn option =
     obs
-    |> twoWeekReturns
+    |> threeDayAdjustedReturns
+    |> cumulativeReturns
 
-getReturnsAroundAnnouncement transcriptA
-
+let t100 = 
+    myTranscripts
+    |> Seq.take 100
+    |> Seq.choose getReturnsAroundAnnouncement
+    |> Seq.toArray
 
 (**
 # Download and Export to Json
