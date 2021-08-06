@@ -25,8 +25,12 @@ For any given earnings call, what we want is to compute returns from a window of
 the last closing price prior to the call and the first two observed closing-prices after the call took place. 
 
 For example:
-- Before/During market hours: If the call had occurred at 11AM ET on a Tuesday, we would fetch Monday's, Tuesday's, and Wednesday's closing prices.
-- After market hours: If the call had occurred at 7PM ET on a Tuesday, we would fetch Tuesday's, Wednesday’s, and Thursday's closing prices.
+    
+    - Before/During market hours: If the call had occurred at 11AM ET on a Tuesday, 
+      we would fetch Monday's, Tuesday's, and Wednesday's closing prices.
+    
+    - After market hours: If the call had occurred at 7PM ET on a Tuesday, 
+      we would fetch Tuesday's, Wednesday’s, and Thursday's closing prices.
 *)
 
 (**
@@ -60,7 +64,7 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<Transcript>>(json)
 
-/// Data
+/// Transcripts data
 let myTranscripts = 
     readJson ("data-cache/TranscriptsDemo.json")
     |> Seq.toArray
@@ -121,7 +125,10 @@ let startSample, endSample =
 let samplePeriodReturns = tiingoReturns startSample endSample
 
 /// SP500 (benchmark of choice)
-let spyObs = samplePeriodReturns "SPY"
+let spyObs = 
+    match samplePeriodReturns "SPY" with
+    | Some obs -> obs
+    | None -> failwith "Tiingo was unable to fetch SPY"
 
 (**
 ## Returns around earnings announcements
@@ -135,9 +142,10 @@ let spyObs = samplePeriodReturns "SPY"
 Sometimes a call might happen on a friday or right before or after a long holiday. 
 In these particular case scenarios, we have to be extra careful when trying to find our three-day return window.
 
-Because we don't have a database with all the non-trading days of any given year, 
-instead of trying to match a three-day return window in one go, it is safer if we work from a range of dates and 
-try to find our three-day return window from there. A range of two full weeks should in principle secure us a three-day return window.
+Because we don't have a database with all the non-trading days of a given year, 
+instead of trying to match a three-day return window instantaneously, it is safer if we work from a range of return observations and 
+try to find our three-day return window from there. A range of two full weeks of returns should in principle,
+allow us to find the three-day window that we're looking for.
 *)
 
 type ReturnsWindow = 
@@ -147,7 +155,8 @@ type ReturnsWindow =
 /// Two weeks return window
 let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option = 
     let minusOneWeek, plusOneWeek = 
-        transcript.Date 
+        let flatDate = transcript.Date.Date
+        flatDate 
         |> fun date -> date.AddDays(-7.0), date.AddDays(7.0)
     
     /// Use of partial aplication
@@ -167,17 +176,21 @@ let firstReturnAfterCall (obs: ReturnsWindow): ReturnObs option =
      
     let dateOfCall = 
         obs.Transcript.Date
-        |> fun date -> if date.Hour < 16 then date else date.AddDays(1.0)
+        |> fun date -> 
+            let flatDate = date.Date 
+            if date.Hour < 16 then flatDate else flatDate.AddDays(1.0)
     
     obs.ReturnsAroundEarnings
-    |> Seq.tryFind (fun xs -> xs.Date.Date >= dateOfCall.Date.Date)
+    |> Seq.tryFind (fun xs -> 
+                        let flatDate = xs.Date.Date 
+                        flatDate >= dateOfCall.Date)
 
 (**
 ### Three-day window
 *)
 
-let findThreeDays (rets: ReturnObs []) 
-                  (middleRet: ReturnObs): ReturnObs [] option = 
+let findThreeDays (middleRet: ReturnObs)
+                  (rets: ReturnObs []) : ReturnObs [] option = 
     rets
     |> Seq.windowed 3
     |> Seq.choose (fun retWindow ->
@@ -191,6 +204,7 @@ let findThreeDays (rets: ReturnObs [])
 ### Adjusted returns
 *)
 
+/// Computes adjusted return
 let adjustedReturns (stock : ReturnObs []) (benchmark: ReturnObs []): ReturnObs [] = 
                         
     let benchMap = 
@@ -208,27 +222,73 @@ let adjustedReturns (stock : ReturnObs []) (benchmark: ReturnObs []): ReturnObs 
                                Return = adjRet}
                      | None -> None)
 
+/// Finds three-day window of adjusted returns
 let threeDayAdjustedReturns (transcript: Transcript): ReturnsWindow option =
 
     /// Check if Tiingo is returning data
-    match spyObs, twoWeekReturnWindow transcript with
-    | Some spyObs, Some stockObs ->
+    match twoWeekReturnWindow transcript with
+    | Some stockObs ->
 
         /// Find first observed return after call
         match firstReturnAfterCall stockObs with
         | Some firstRet ->
 
-            /// Find three-day window
-            match  findThreeDays spyObs firstRet, findThreeDays stockObs.ReturnsAroundEarnings firstRet with              
+            /// Find three-day window for SPY and Stock
+            let retWindow = findThreeDays firstRet
+            match retWindow spyObs, retWindow stockObs.ReturnsAroundEarnings with          
             | Some spyWindow, Some stockWindow ->
 
-                /// Compute excess returns from SPY
-                let adjRet = adjustedReturns stockWindow spyWindow
-                Some { Transcript = transcript
-                       ReturnsAroundEarnings = adjRet }
+            /// Compute excess returns from SPY
+            let adjRet = adjustedReturns stockWindow spyWindow
+            Some { Transcript = transcript
+                   ReturnsAroundEarnings = adjRet }
             | _ -> None
         |_ -> None   
     | _ -> None
+
+(**
+### Testing functions
+*)
+
+(**
+#### Before maket hours earnings call
+*)
+
+let beforeMktExample = 
+    myTranscripts
+    |> Seq.tryFind (fun xs -> xs.Date.Hour < 16)
+    |> fun obs ->
+    match obs with
+    | Some obs ->
+        match threeDayAdjustedReturns obs with
+        | Some retWindow -> 
+            Some ($"Earnings Call DateTime: {obs.Date}", retWindow.ReturnsAroundEarnings)
+        | None -> None
+    | None -> None 
+
+beforeMktExample
+
+(*** include-it ***)
+
+(**
+#### After maket hours earnings call
+*)
+
+let afterMktExample = 
+    myTranscripts
+    |> Seq.tryFind (fun xs -> xs.Date.Hour > 16)
+    |> fun obs ->
+    match obs with
+    | Some obs ->
+        match threeDayAdjustedReturns obs with
+        | Some retWindow -> 
+            Some ($"Earnings Call DateTime: {obs.Date}", retWindow.ReturnsAroundEarnings)
+        | None -> None
+    | None -> None
+
+afterMktExample
+
+(*** include-it ***)
 
 (**
 ### Cumulative returns
@@ -246,6 +306,19 @@ let cumulativeReturns (obs: ReturnsWindow): AnnouncementDayReturn =
        { Transcript = obs.Transcript
          CumulativeReturn = cumRet }
 
+let myReturns = 
+    myTranscripts
+    |> Array.take 100
+    |> Array.Parallel.choose threeDayAdjustedReturns
+    |> Array.Parallel.map cumulativeReturns
+
+myReturns
+|> Seq.take 5
+|> Seq.map (fun xs -> xs.Transcript.Date, xs.Transcript.Ticker, Math.Round(xs.CumulativeReturn, 4)) 
+|> Seq.iter (fun xs -> printfn $"{xs}")
+
+(***include-it***)
+
 (**
 ### Download and Export to Json
 *)
@@ -253,11 +326,5 @@ let cumulativeReturns (obs: ReturnsWindow): AnnouncementDayReturn =
 let AnnouncementDayReturnToJson (fileName: string) (transcripts: AnnouncementDayReturn [])  = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
-
-let myReturns = 
-    myTranscripts
-    |> Array.take 100
-    |> Array.Parallel.choose threeDayAdjustedReturns
-    |> Array.Parallel.map cumulativeReturns
 
 AnnouncementDayReturnToJson "data-cache/AnnouncementDayReturnsDemo.json" myReturns

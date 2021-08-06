@@ -557,9 +557,9 @@ let tfIdfNGramsTokenizer (tfIdfThresh : float)
     |> Seq.distinct
     // TfIdfFilter
     |> Seq.choose (fun term -> 
-    match Map.tryFind term tdIdfofDoc with 
-    | Some term -> if term.TfIdf > tfIdfThresh then Some (term.Term) else None
-    | _ -> None)
+                   match Map.tryFind term tdIdfofDoc with 
+                   | Some term -> if term.TfIdf > tfIdfThresh then Some (term.Term) else None
+                   | _ -> None)
     |> Set.ofSeq
 
 (**
