@@ -203,31 +203,8 @@ let findDateTime (doc: TranscriptDocument): option<DateTime> =
         $"{date} {time}" |> convertToDateTime |> Some 
     | _ -> None
 
-/// Use of active patterns
-let (|Date|_|) (doc:TranscriptDocument) = findDate doc
-let (|Time|_|) (doc:TranscriptDocument) = findTime doc
-let (|DateAndTime|_|) (doc:TranscriptDocument) = 
-    match doc with
-    | Date date & Time time -> 
-        $"{date} {time}"
-        |> convertToDateTime
-        |> Some
-    | _ -> None
-
-let findDateTime2 (doc: TranscriptDocument): option<DateTime> =
-    match doc with
-    | Date date & Time time -> Some ($"{date} {time}" |> convertToDateTime) 
-    | _ -> None
-
-let findDateTime3 (doc: TranscriptDocument): option<DateTime> =
-    match doc with 
-    | DateAndTime dt -> Some dt
-    | _ -> None
-
 /// Tesla call DateTime
 findDateTime teslaDoc
-findDateTime2 teslaDoc
-findDateTime3 teslaDoc
 
 (*** include-it ***)
 
@@ -320,40 +297,35 @@ let asyncPage (n: int) =
 
 (**
 ### Parse Transcript Pages
-let async1to50 = 
-    [1 .. 50]
-    |> Seq.map asyncPage
-    |> fun xs -> Async.Parallel(xs, 5)
-    |> Async.RunSynchronously
-    |> Array.collect Seq.toArray
+*)
 
-let async1to50 = 
-    [1 .. 50]
+let exampleTranscripts = 
+    [200 .. 225]
     |> Seq.map asyncPage
     |> fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
 
 /// Total number of transcripts
-printfn $"N: {async1to50.Length}"
+printfn $"N: {exampleTranscripts.Length}"
 
 (*** include-output ***)
 
 /// First three transcripts
-async1to50
+exampleTranscripts
 |> Array.take 3
 |> Array.iter (fun transcript -> 
     printfn $" Datetime: {transcript.Date} --- Ticker, Exchange: {transcript.Ticker}, {transcript.Exchange}")
 
 (*** include-output ***)
 
-### Export to json
+(**
+## Export to json
+*)
 
 let TranscriptsToJson (fileName: string) (transcripts: Transcript []) = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-TranscriptsToJson "data-cache/Motley50.json" async1to50
-
-*)
+TranscriptsToJson "data-cache/TranscriptsDemo.json" exampleTranscripts

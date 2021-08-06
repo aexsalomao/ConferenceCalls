@@ -70,11 +70,9 @@ let readJson (jsonFile: string) =
 
 /// Data
 let myTranscripts = 
-    readJson ("data-cache/Motley50.json")
-    |> Seq.rev
+    readJson ("data-cache/TranscriptsDemo.json")
+    |> Seq.take 50
     |> Seq.toArray
-
-myTranscripts.Length
 
 (**
 ## Barplots: Timing of calls
@@ -100,10 +98,10 @@ Provided that Tiingo supports the ticker we are looking for, we can use the `Tii
 returns data for any given ticker. To be extra careful, we can check if Tiingo is returning any data for a given ticker with pattern matching.
 *)
 
-/// Tiingo returns call
+/// Tiingo returns
 let tiingoReturns (tiingoStart: DateTime)
                   (tiingoEnd: DateTime)
-                  (ticker: string) =
+                  (ticker: string): ReturnObs [] option=
     ticker
     |> Tiingo.request
     |> Tiingo.startOn tiingoStart
@@ -114,17 +112,6 @@ let tiingoReturns (tiingoStart: DateTime)
     | [||] -> None
     | _ -> Some rets
 
-/// Returns map
-let returnsMap (rets: ReturnObs [] option) = 
-    match rets with
-    | Some rets ->
-        let retsMap = 
-            rets 
-            |> Seq.map (fun xs -> xs.Date, xs) 
-            |> Map.ofSeq
-        Some (retsMap)
-    | None -> None
-
 (**
 ### Use of partial application
 *)
@@ -133,7 +120,7 @@ let returnsMap (rets: ReturnObs [] option) =
 From the collected transcripts, we can set a date range from which we can collect returns. The `tiingoReturns` function allows for the user to set dates ...
 *)
 
-/// Find sample range
+/// Sample range
 let startSample, endSample =    
     myTranscripts
     |> Seq.map (fun xs -> xs.Date)
@@ -186,7 +173,7 @@ let firstReturnAfterCall (obs: ReturnsWindow): ReturnObs option =
         |> fun date -> if date.Hour < 16 then date else date.AddDays(1.0)
     
     obs.ReturnsAroundEarnings
-    |> Seq.tryFind (fun xs -> xs.Date.Day >= dateOfCall.Day)
+    |> Seq.tryFind (fun xs -> xs.Date.Date >= dateOfCall.Date.Date)
 
 (**
 ### Three-day window
@@ -199,7 +186,7 @@ let findThreeDays (rets: ReturnObs [])
     |> Seq.choose (fun retWindow ->
                    let dates = retWindow |> Array.map (fun rets -> rets.Date)
                    match dates with
-                   | [|d1; d2; d3|] when d2.Day = middleRet.Date.Day -> Some (retWindow)
+                   | [|d1; d2; d3|] when d2.Date.Date = middleRet.Date.Date -> Some (retWindow)
                    | _ -> None)
     |> Seq.tryExactlyOne
 
@@ -268,31 +255,21 @@ let cumulativeReturns (obs: ReturnsWindow option): AnnouncementDayReturn option 
                    CumulativeReturn = cumRet}
     | None -> None
 
-let getReturnsAroundAnnouncement (obs: Transcript): AnnouncementDayReturn option =
+let returnsAroundAnnouncement (obs: Transcript): AnnouncementDayReturn option =
     obs
     |> threeDayAdjustedReturns
     |> cumulativeReturns
 
-let t100 = 
-    myTranscripts
-    |> Seq.take 100
-    |> Seq.choose getReturnsAroundAnnouncement
-    |> Seq.toArray
-
 (**
-# Download and Export to Json
+### Download and Export to Json
 *)
 
-(*
-let t1950 = 
-    myTranscripts
-    |> Seq.take 1950
-    |> Seq.choose getReturnsAroundAnnouncement
-    |> Seq.toArray
-
-let AnnouncementDayReturnToJson (transcripts: AnnouncementDayReturn [], fileName: string) = 
+let AnnouncementDayReturnToJson (fileName: string) (transcripts: AnnouncementDayReturn [])  = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
-AnnouncementDayReturnToJson (t1950, "data-cache/AnnouncementDay1950.json")
-*)
+let myReturns = 
+    myTranscripts
+    |> Array.choose returnsAroundAnnouncement
+
+AnnouncementDayReturnToJson "data-cache/AnnouncementDayReturnsDemo.json" myReturns
