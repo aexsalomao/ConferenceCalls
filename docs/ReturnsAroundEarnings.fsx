@@ -1,6 +1,6 @@
 (**
 ---
-title: Returns around earnings
+title: Returns around earnings announcements
 category: Scripts
 categoryindex: 2
 index: 2
@@ -8,33 +8,29 @@ index: 2
 *)
 
 (**
-# Returns around earnings
+# Returns around earnings announcements
 *)
 
 (**
-In the `TranscriptParsing.fsx` script, we dowloaded company specific earnings call transcripts, 
-ticker, exchange and the exact date and time of each earnings call. 
+In the `TranscriptParsing.fsx` script, we downloaded earnings call transcripts, ticker and exchange information, 
+and even the exact date and time of each earnings call. With this information we can proceed to computing stock returns 
+around the time of the call. 
 
-With this information, can use Tiingo's API to fetch end-of-day price data for each ticker around the date of the company's earnings call.
-To be more precise, we will fetch end-of-day closing prices from a three-day window period. Why a three-day window?
+To start, we first need to fetch end-of-day or closing price data from Tiingo’s API. 
+To be more precise, we will be fetching closing prices from a three-day window. Why a three-day window?
 
-Since earnings announcements are to a certain extent expected to have an impact on market prices, 
-we have to be careful when computing returns as we would be computing returns from **end-of-day** prices. 
-While some calls might happen before or during market hours, some calls happen after market hours and so we have to be careful when computing returns for different companies.
-
-For any given earnings call, what we want is to compute returns from 3 closing prices: (1) the last closing price prior to the call (2) the closing price 
-after the call took place, and finally (3) the closing price after the day of the call.
+While calls that occur before or during market hours are expected to affect stock prices on that very same day, 
+calls that occur after market hours are expected to only impact prices on the following day. 
+For any given earnings call, what we want is to compute returns from a window of 3 closing prices: 
+the last closing price prior to the call and the first two observed closing-prices after the call took place. 
 
 For example:
-
-- If the call had occured before or even during market hours, say the call happened at 11AM ET on a Tuesday, we would fetch Monday's, Tuesday's, and Wednesday's end-of-day prices.
-- Likewise, if the call had occured after market hours, say the call happened at 7PM ET on a Tuesday, we would fetch Tuesday's, Wedneday's, and Thursday's end-of-day prices.
-
-From these price observations, we can compute the total return or cumualtive return of a specific company around its earnings announcement. 
+- Before/During market hours: If the call had occurred at 11AM ET on a Tuesday, we would fetch Monday's, Tuesday's, and Wednesday's closing prices.
+- After market hours: If the call had occurred at 7PM ET on a Tuesday, we would fetch Tuesday's, Wednesday’s, and Thursday's closing prices.
 *)
 
 (**
-## Importing packages and loading scripts
+## Import packages and load scripts
 *)
 
 #r "nuget: FSharp.Data"
@@ -56,14 +52,10 @@ Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
-## Reading Json
+### Reading Transcript data from .json file:
 *)
 
-(**
-Read data that was dowloaded using `TranscriptParsing.fsx`. 
-*)
-
-/// Reading JSON
+/// JSON data reader
 let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<Transcript>>(json)
@@ -71,7 +63,6 @@ let readJson (jsonFile: string) =
 /// Data
 let myTranscripts = 
     readJson ("data-cache/TranscriptsDemo.json")
-    |> Seq.take 50
     |> Seq.toArray
 
 (**
@@ -95,13 +86,13 @@ let callsByTimeOfDay (transcripts : Transcript []) =
 
 (**
 Provided that Tiingo supports the ticker we are looking for, we can use the `Tiingo` module from `Common.fsx` to download 
-returns data for any given ticker. To be extra careful, we can check if Tiingo is returning any data for a given ticker with pattern matching.
+returns data for any given ticker. To be extra careful, we can check if Tiingo is returning any data at all with some pattern matching.
 *)
 
 /// Tiingo returns
 let tiingoReturns (tiingoStart: DateTime)
                   (tiingoEnd: DateTime)
-                  (ticker: string): ReturnObs [] option=
+                  (ticker: string): ReturnObs [] option =
     ticker
     |> Tiingo.request
     |> Tiingo.startOn tiingoStart
@@ -117,7 +108,7 @@ let tiingoReturns (tiingoStart: DateTime)
 *)
 
 (**
-From the collected transcripts, we can set a date range from which we can collect returns. The `tiingoReturns` function allows for the user to set dates ...
+From the collected transcripts, we can set a date range from which we can collect returns.
 *)
 
 /// Sample range
@@ -126,14 +117,14 @@ let startSample, endSample =
     |> Seq.map (fun xs -> xs.Date)
     |> fun dates -> (Seq.min dates).AddDays(-10.), (Seq.max dates).AddDays(10.)
 
-/// "Bake-in dates"
+/// Tiingo returns function with "baked-in dates"
 let samplePeriodReturns = tiingoReturns startSample endSample
 
-/// SP500
+/// SP500 (benchmark of choice)
 let spyObs = samplePeriodReturns "SPY"
 
 (**
-## Returns Around Earnings Announcements
+## Returns around earnings announcements
 *)
 
 (**
@@ -141,12 +132,17 @@ let spyObs = samplePeriodReturns "SPY"
 *)
 
 (**
-Since we are not working with an external database that contains all trading calendar days ...
+Sometimes a call might happen on a friday or right before or after a long holiday. 
+In these particular case scenarios, we have to be extra careful when trying to find our three-day return window.
+
+Because we don't have a database with all the non-trading days of any given year, 
+instead of trying to match a three-day return window in one go, it is safer if we work from a range of dates and 
+try to find our three-day return window from there. A range of two full weeks should in principle secure us a three-day return window.
 *)
 
 type ReturnsWindow = 
-    { Transcript : Transcript
-      ReturnsAroundEarnings : ReturnObs [] }
+    { Transcript: Transcript
+      ReturnsAroundEarnings: ReturnObs [] }
 
 /// Two weeks return window
 let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option = 
@@ -154,6 +150,7 @@ let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option =
         transcript.Date 
         |> fun date -> date.AddDays(-7.0), date.AddDays(7.0)
     
+    /// Use of partial aplication
     let twoWeekTiingoRets = tiingoReturns minusOneWeek plusOneWeek
 
     match twoWeekTiingoRets transcript.Ticker with
@@ -194,44 +191,41 @@ let findThreeDays (rets: ReturnObs [])
 ### Adjusted returns
 *)
 
+let adjustedReturns (stock : ReturnObs []) (benchmark: ReturnObs []): ReturnObs [] = 
+                        
+    let benchMap = 
+        benchmark 
+        |> Array.map (fun xs -> xs.Date, xs) 
+        |> Map.ofArray
+    
+    stock
+    |> Array.choose (fun stockRet ->
+                     match Map.tryFind stockRet.Date benchMap with
+                     | Some spyRet -> 
+                        let adjRet = stockRet.Return - spyRet.Return 
+                        Some { Symbol = stockRet.Symbol
+                               Date = stockRet.Date
+                               Return = adjRet}
+                     | None -> None)
+
 let threeDayAdjustedReturns (transcript: Transcript): ReturnsWindow option =
 
     /// Check if Tiingo is returning data
-    match spyObs, 
-          twoWeekReturnWindow transcript with
-    | Some spyObs, 
-      Some stockObs ->
+    match spyObs, twoWeekReturnWindow transcript with
+    | Some spyObs, Some stockObs ->
 
-      /// Find first observed return after call
+        /// Find first observed return after call
         match firstReturnAfterCall stockObs with
         | Some firstRet ->
 
-        /// Find three-day window
-            match  findThreeDays spyObs firstRet, 
-                   findThreeDays stockObs.ReturnsAroundEarnings firstRet with              
-            | Some spyWindow, 
-              Some stockWindow ->
+            /// Find three-day window
+            match  findThreeDays spyObs firstRet, findThreeDays stockObs.ReturnsAroundEarnings firstRet with              
+            | Some spyWindow, Some stockWindow ->
 
-            /// Compute excess returns from SPY
-                let adjustedReturns = 
-             
-                    let spyWindowMap = 
-                        spyWindow 
-                        |> Array.map (fun xs -> xs.Date, xs) 
-                        |> Map.ofArray
-
-                    stockWindow
-                    |> Array.choose 
-                        (fun stockRet ->
-                         match Map.tryFind stockRet.Date spyWindowMap with
-                         | Some spyRet -> 
-                            let adjRet = stockRet.Return - spyRet.Return 
-                            Some { Symbol = stockRet.Symbol
-                                   Date = stockRet.Date
-                                   Return = adjRet}
-                         | None -> None)
+                /// Compute excess returns from SPY
+                let adjRet = adjustedReturns stockWindow spyWindow
                 Some { Transcript = transcript
-                       ReturnsAroundEarnings = adjustedReturns }
+                       ReturnsAroundEarnings = adjRet }
             | _ -> None
         |_ -> None   
     | _ -> None
@@ -244,21 +238,13 @@ type AnnouncementDayReturn =
     { Transcript : Transcript
       CumulativeReturn : float }
 
-let cumulativeReturns (obs: ReturnsWindow option): AnnouncementDayReturn option = 
-    match obs with
-    | Some obs ->     
-        (1.0, obs.ReturnsAroundEarnings)
-        ||> Array.fold (fun acc x -> acc*(1.0+ x.Return))
-        |> fun xs -> 
-            let cumRet = xs - 1.
-            Some { Transcript = obs.Transcript
-                   CumulativeReturn = cumRet}
-    | None -> None
-
-let returnsAroundAnnouncement (obs: Transcript): AnnouncementDayReturn option =
-    obs
-    |> threeDayAdjustedReturns
-    |> cumulativeReturns
+let cumulativeReturns (obs: ReturnsWindow): AnnouncementDayReturn = 
+    (1.0, obs.ReturnsAroundEarnings)
+    ||> Array.fold (fun acc x -> acc*(1.0+ x.Return))
+    |> fun xs -> 
+       let cumRet = xs - 1.
+       { Transcript = obs.Transcript
+         CumulativeReturn = cumRet }
 
 (**
 ### Download and Export to Json
@@ -270,6 +256,8 @@ let AnnouncementDayReturnToJson (fileName: string) (transcripts: AnnouncementDay
 
 let myReturns = 
     myTranscripts
-    |> Array.choose returnsAroundAnnouncement
+    |> Array.take 100
+    |> Array.Parallel.choose threeDayAdjustedReturns
+    |> Array.Parallel.map cumulativeReturns
 
 AnnouncementDayReturnToJson "data-cache/AnnouncementDayReturnsDemo.json" myReturns
