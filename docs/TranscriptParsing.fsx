@@ -26,6 +26,9 @@ nuget package using .NET's package manager [NuGet](https://www.nuget.org/package
 open FSharp.Data
 open Newtonsoft.Json
 open System
+open System.IO
+
+Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 
 (**
 ## Transcript - Url
@@ -291,16 +294,56 @@ let asyncPage (n: int) =
 
         return transcripts }
 
+let asyncTranscript2 (url: string) = 
+    let rec loop attempt url =
+        async {
+            try 
+                let! transcriptDoc = HtmlDocument.AsyncLoad url
+                let transcriptRec = parseTrancriptDoc transcriptDoc
+                return transcriptRec
+            with e ->
+                if attempt > 0 then
+                    do! Async.Sleep 2000 // Wait 2 seconds in case we're throttled.
+                    return! loop (attempt - 1) url
+                else return! failwithf "Failed to request '%s'. Error: %O" url e }
+    loop 5 url
+
+let asyncPage2 (n: int) =
+    let rec loop attempt n =
+        async {
+            printfn $"{n}"
+            let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}"
+            try 
+                let! pageDoc = HtmlDocument.AsyncLoad frontPageP
+                let transcripts = 
+                    pageDoc 
+                    |> findTranscriptUrls 
+                    |> Seq.map asyncTranscript2 
+                    |> Async.Parallel
+                    |> Async.RunSynchronously
+                    |> Seq.choose id
+                    |> Seq.toArray
+                return transcripts
+            with e ->
+                if attempt > 0 then
+                    do! Async.Sleep 2000 // Wait 2 seconds in case we're throttled.
+                    return! loop (attempt - 1) n
+                else return! failwithf "Failed to request '%s'. Error: %O" frontPageP e }
+    loop 5 n 
+
+
 (**
 ### Parse Transcript Pages
 *)
 
+let asynchThrottled x = Async.Parallel(x, 5)
+
 let exampleTranscripts = 
-    [200 .. 225]
-    |> Seq.map asyncPage
-    |> Async.Sequential// fun xs -> Async.Parallel(xs, 5)
+    [200]//[200..205]
+    |> Seq.map asyncPage2
+    |> asynchThrottled // fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
-    |> Array.collect Seq.toArray
+    |> Array.collect id
 
 /// Total number of transcripts
 printfn $"N: {exampleTranscripts.Length}"
@@ -319,9 +362,9 @@ exampleTranscripts
 ## Export to json
 *)
 
-let TranscriptsToJson (fileName: string) (transcripts: Transcript []) = 
+let transcriptsToJson (fileName: string) (transcripts: Transcript []) = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-TranscriptsToJson "data-cache/TranscriptsDemo.json" exampleTranscripts
+transcriptsToJson "transcriptsDemo.json" exampleTranscripts
