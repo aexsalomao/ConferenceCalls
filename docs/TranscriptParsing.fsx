@@ -339,7 +339,7 @@ let asyncPage2 (n: int) =
 let asynchThrottled x = Async.Parallel(x, 5)
 
 let exampleTranscripts = 
-    [200..203]//[0..1000]
+    [200]//[200..205]
     |> Seq.map asyncPage2
     |> asynchThrottled // fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
