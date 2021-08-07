@@ -284,16 +284,12 @@ let asyncPage (n: int) =
             pageDoc 
             |> findTranscriptUrls 
             |> Seq.map asyncTranscript 
-            |> fun xs -> Async.Parallel(xs, 5)
+            |> Async.Parallel
             |> Async.RunSynchronously
-            |> Seq.choose (
-             function
-             | None -> None
-             | Some t -> Some t)
+            |> Seq.choose id
             |> Seq.toArray
 
-        return transcripts
-        }
+        return transcripts }
 
 (**
 ### Parse Transcript Pages
@@ -302,7 +298,7 @@ let asyncPage (n: int) =
 let exampleTranscripts = 
     [200 .. 225]
     |> Seq.map asyncPage
-    |> fun xs -> Async.Parallel(xs, 5)
+    |> Async.Sequential// fun xs -> Async.Parallel(xs, 5)
     |> Async.RunSynchronously
     |> Array.collect Seq.toArray
 
