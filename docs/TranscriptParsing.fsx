@@ -28,6 +28,8 @@ open Newtonsoft.Json
 open System
 open System.IO
 
+Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
+
 (**
 ## Transcript - Url
 We can download or parse individual html documents with their url.
@@ -334,7 +336,7 @@ let asyncPage2 (n: int) =
 ### Parse Transcript Pages
 *)
 
-let asynchThrottled x = Async.Parallel(x, 20)
+let asynchThrottled x = Async.Parallel(x, 5)
 
 let exampleTranscripts = 
     [200..203]//[0..1000]
@@ -360,14 +362,9 @@ exampleTranscripts
 ## Export to json
 *)
 
-let TranscriptsToJson (fileName: string) (transcripts: Transcript []) = 
+let transcriptsToJson (fileName: string) (transcripts: Transcript []) = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-let dataCache = Path.Combine(__SOURCE_DIRECTORY__,"..","data-cache")
-let jsonFile = Path.Combine(dataCache, "TranscriptsDemo.json") 
-if not (Directory.Exists(dataCache)) then
-    Directory.CreateDirectory(dataCache) |> ignore
-
-TranscriptsToJson jsonFile exampleTranscripts
+transcriptsToJson "transcriptsDemo.json" exampleTranscripts
