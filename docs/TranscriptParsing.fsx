@@ -341,7 +341,7 @@ let asynchThrottled x = Async.Parallel(x, 5)
 let exampleTranscripts = 
     [200]//[200..205]
     |> Seq.map asyncPage2
-    |> asynchThrottled // fun xs -> Async.Parallel(xs, 5)
+    |> asynchThrottled
     |> Async.RunSynchronously
     |> Array.collect id
 
@@ -367,4 +367,4 @@ let transcriptsToJson (fileName: string) (transcripts: Transcript []) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-transcriptsToJson "transcriptsDemo.json" exampleTranscripts
+transcriptsToJson "data-cache/transcriptsDemo.json" exampleTranscripts

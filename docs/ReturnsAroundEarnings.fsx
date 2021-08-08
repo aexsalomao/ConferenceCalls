@@ -97,22 +97,24 @@ returns data for any given ticker. To be extra careful, we can check if Tiingo i
 let tiingoReturns (tiingoStart: DateTime)
                   (tiingoEnd: DateTime)
                   (ticker: string): ReturnObs [] option =
+    let checkReturns rets = 
+        match rets with
+        | [||] -> None
+        | _ -> Some rets
+        
     ticker
     |> Tiingo.request
     |> Tiingo.startOn tiingoStart
     |> Tiingo.endOn tiingoEnd
     |> Tiingo.getReturns
-    |> fun rets ->
-        match rets with
-        | [||] -> None
-        | _ -> Some rets
+    |> checkReturns
 
 (**
-### Use of partial application
+### Benchmark sample (SP500, "SPY")
 *)
 
 (**
-From the collected transcripts, we can set a date range from which we can collect returns.
+SP500
 *)
 
 /// Sample range
@@ -121,27 +123,22 @@ let startSample, endSample =
     |> Seq.map (fun xs -> xs.Date)
     |> fun dates -> (Seq.min dates).AddDays(-10.), (Seq.max dates).AddDays(10.)
 
-/// Tiingo returns function with "baked-in dates"
-let samplePeriodReturns = tiingoReturns startSample endSample
-
 /// SP500 (benchmark of choice)
 let spyObs = 
-    match samplePeriodReturns "SPY" with
-    | None -> failwith "why isn't Tiingo working?"
-    | Some rets ->
+    let getReturnsMap rets =
         rets
-        |> Array.map(fun x -> x.Date, x.Return)
-    |> Map
+        |> Array.map (fun xs -> xs.Date, xs.Return)
+        |> Map
+    let checkSpy rets =
+        match rets with 
+        | None -> failwith "why isn't Tiingo working"
+        | Some rets -> rets
+        
+    "SPY"
+    |> tiingoReturns startSample endSample
+    |> checkSpy
+    |> getReturnsMap
 
-let spyReturnsBetween (begWin:DateTime) (endWin:DateTime) =
-    let rec loop (date:DateTime) rets =
-        if date.Date <= endWin.Date then
-            match Map.tryFind date spyObs with
-            | Some spy -> loop (date.AddDays(1.0)) (spy::rets)
-            | None -> loop (date.AddDays(1.0)) rets
-        else rets
-    loop begWin []
-  
 (**
 ## Returns around earnings announcements
 *)
@@ -168,17 +165,13 @@ type ReturnsWindow =
 let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option = 
     let minusOneWeek, plusOneWeek = 
         let flatDate = transcript.Date.Date
-        flatDate.AddDays(-7.0), flatDate.AddDays(7.0)
-    
-    /// Use of partial aplication
-    let twoWeekTiingoRets = tiingoReturns minusOneWeek plusOneWeek
-    
-    let retsAroundEarnings rets =
+        flatDate.AddDays(-7.0), flatDate.AddDays(7.0)    
+    let retsAroundEarnings (rets: ReturnObs []): ReturnsWindow = 
         { Transcript = transcript
           ReturnsAroundEarnings = rets }
-    
+          
     transcript.Ticker
-    |> twoWeekTiingoRets
+    |> tiingoReturns minusOneWeek plusOneWeek
     |> Option.map retsAroundEarnings
 
 (**
@@ -200,8 +193,9 @@ let firstReturnAfterCall (obs: ReturnsWindow): ReturnObs option =
 ### Three-day window
 *)
 
-let findThreeDays (middleRet: ReturnObs)
-                  (rets: ReturnObs []) : ReturnObs [] option = 
+/// Three day return window
+let findThreeDays (middleRet: ReturnObs) (rets: ReturnObs []) : ReturnObs [] option = 
+   
     rets
     |> Seq.windowed 3
     |> Seq.tryFind (fun retWindow ->
@@ -216,6 +210,16 @@ type AnnouncementDayReturn =
     { Transcript : Transcript
       CumulativeReturn : float }
 
+/// SPY returns window
+let spyReturnsBetween (begWin:DateTime) (endWin:DateTime) =
+    let rec loop (date:DateTime) rets =
+        if date.Date <= endWin.Date then
+            match Map.tryFind date spyObs with
+            | Some spy -> loop (date.AddDays(1.0)) (spy::rets)
+            | None -> loop (date.AddDays(1.0)) rets
+        else rets
+    loop begWin []
+  
 /// Computes adjusted return
 let adjustedReturns (stock : ReturnObs []) : float = 
     let begWin = stock |> Seq.map(fun x -> x.Date) |> Seq.min
@@ -235,7 +239,7 @@ let adjustedReturns (stock : ReturnObs []) : float =
         |> cumRet                             
     stockRet - spy
 
-/// Finds three-day window of adjusted returns
+/// Finds three-day window of adjusted returns and computes cumulative returns
 let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn option =
     let findRetWindows (stockObs:ReturnsWindow Option) =
         stockObs
@@ -243,6 +247,7 @@ let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn opti
             match firstReturnAfterCall stockObs with
             | Some firstRet -> findThreeDays firstRet stockObs.ReturnsAroundEarnings
             | None -> None)
+    
     let getAdjustedReturns input =
         match input with
         | Some stockRet ->
@@ -258,64 +263,17 @@ let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn opti
     |> getAdjustedReturns
 
 (**
-### Testing functions
-*)
-
-(**
-#### Before maket hours earnings call
-*)
-
-let beforeMktExample = 
-    myTranscripts
-    |> Seq.tryFind (fun xs -> xs.Date.Hour < 16)
-    |> fun obs ->
-    match obs with
-    | Some obs ->
-        match threeDayAdjustedReturns obs with
-        | Some retWindow -> 
-            Some ($"Earnings Call DateTime: {obs.Date}", retWindow.ReturnsAroundEarnings)
-        | None -> None
-    | None -> None 
-
-beforeMktExample
-
-(*** include-it ***)
-
-(**
-#### After maket hours earnings call
-*)
-
-let afterMktExample = 
-    myTranscripts
-    |> Seq.tryFind (fun xs -> xs.Date.Hour > 16)
-    |> fun obs ->
-    match obs with
-    | Some obs ->
-        match threeDayAdjustedReturns obs with
-        | Some retWindow -> 
-            Some ($"Earnings Call DateTime: {obs.Date}", retWindow.ReturnsAroundEarnings)
-        | None -> None
-    | None -> None
-
-afterMktExample
-
-(*** include-it ***)
-
-(**
-### Cumulative returns
+#### Compute cumualtive returns
 *)
 
 let myReturns = 
     myTranscripts
-    |> Array.take 100
-    |> Array.Parallel.choose threeDayAdjustedReturn
+    |> Array.Parallel.choose threeDayAdjustedReturns
 
 myReturns
-|> Seq.take 5
-|> Seq.map (fun xs -> xs.Transcript.Date, xs.Transcript.Ticker, Math.Round(xs.CumulativeReturn, 4)) 
-|> Seq.iter (fun xs -> printfn $"{xs}")
-
-(***include-it***)
+|> Array.take 5
+|> Array.iter (fun xs -> 
+    printfn $"{xs.Transcript.Ticker} - Cum. Return: {Math.Round(xs.CumulativeReturn, 4)}")
 
 (**
 ### Download and Export to Json
