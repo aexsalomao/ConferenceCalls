@@ -23,10 +23,9 @@ nuget package using .NET's package manager [NuGet](https://www.nuget.org/package
 #r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json"
 
+open System
 open FSharp.Data
 open Newtonsoft.Json
-open System
-open System.IO
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 
@@ -271,30 +270,6 @@ let teslaTranscript =
 *)
 
 let asyncTranscript (url: string) = 
-    async {
-        let! transcriptDoc = HtmlDocument.AsyncLoad url
-        let transcriptRec = parseTrancriptDoc transcriptDoc
-        return transcriptRec
-        }
-
-let asyncPage (n: int) = 
-    async {
-        printfn $"{n}"
-        let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}" 
-        let! pageDoc = HtmlDocument.AsyncLoad frontPageP
-
-        let transcripts = 
-            pageDoc 
-            |> findTranscriptUrls 
-            |> Seq.map asyncTranscript 
-            |> Async.Parallel
-            |> Async.RunSynchronously
-            |> Seq.choose id
-            |> Seq.toArray
-
-        return transcripts }
-
-let asyncTranscript2 (url: string) = 
     let rec loop attempt url =
         async {
             try 
@@ -308,7 +283,7 @@ let asyncTranscript2 (url: string) =
                 else return! failwithf "Failed to request '%s'. Error: %O" url e }
     loop 5 url
 
-let asyncPage2 (n: int) =
+let asyncPage (n: int) =
     let rec loop attempt n =
         async {
             printfn $"{n}"
@@ -318,7 +293,7 @@ let asyncPage2 (n: int) =
                 let transcripts = 
                     pageDoc 
                     |> findTranscriptUrls 
-                    |> Seq.map asyncTranscript2 
+                    |> Seq.map asyncTranscript
                     |> Async.Parallel
                     |> Async.RunSynchronously
                     |> Seq.choose id
@@ -331,7 +306,6 @@ let asyncPage2 (n: int) =
                 else return! failwithf "Failed to request '%s'. Error: %O" frontPageP e }
     loop 5 n 
 
-
 (**
 ### Parse Transcript Pages
 *)
@@ -339,8 +313,8 @@ let asyncPage2 (n: int) =
 let asynchThrottled x = Async.Parallel(x, 5)
 
 let exampleTranscripts = 
-    [200]//[200..205]
-    |> Seq.map asyncPage2
+    [200 .. 205]
+    |> Seq.map asyncPage
     |> asynchThrottled
     |> Async.RunSynchronously
     |> Array.collect id
@@ -367,4 +341,4 @@ let transcriptsToJson (fileName: string) (transcripts: Transcript []) =
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-transcriptsToJson "data-cache/transcriptsDemo.json" exampleTranscripts
+transcriptsToJson "data-cache/TranscriptsDemo.json" exampleTranscripts

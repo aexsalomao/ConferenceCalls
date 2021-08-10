@@ -6,22 +6,22 @@
 ## Import packages and load scripts
 *)
 
-#r "nuget: FSharp.Data"
-#r "nuget: Newtonsoft.Json"
-#r "nuget: Plotly.NET, 2.0.0-preview.6"
 #r "nuget: FSharp.Collections.ParallelSeq"
+#r "nuget: FSharp.Stats"
 
-/// #load "TranscriptParsing.fsx"
-/// #load "ReturnsAroundCall.fsx" 
+#load "TranscriptParsing.fsx"
+#load "ReturnsAroundEarnings.fsx" 
 
 open System
 open System.Text.RegularExpressions
+open FSharp.Collections.ParallelSeq
 open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
+open FSharp.Stats
 
-/// open TranscriptParsing
-/// open ReturnsAroundCall
+open TranscriptParsing
+open ReturnsAroundEarnings
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
@@ -30,23 +30,17 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 ## Read transcripts from json file
 *)
 
-type Transcript = 
-    {Ticker : string
-     Exchange: string
-     Date : DateTime
-     Paragraphs : string []}
-
-type AnnouncementDayReturn = 
-    { Transcript : Transcript
-      CumulativeReturn : float}
-
 let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let rawDataset = 
-    readJson ("data-cache/ReturnsAroundCall2500.json") 
-    |> Seq.take 100
+let rawDataset1 = 
+    readJson ("data-cache/ReturnsAroundCall2500.json")
+    |> Seq.toArray
+ 
+let rawDataset2 = 
+    readJson ("data-cache/ReturnsAroundEarningsFullSample.json")
+    |> Seq.take 2500
     |> Seq.toArray
 
 (**
@@ -59,7 +53,7 @@ One-liners like opening and closing remarks add noise to our dataset and should 
 *)
 
 let shortParagraphs = 
-    rawDataset
+    rawDataset1
     |> Array.collect (fun xs -> 
         xs.Transcript.Paragraphs 
         |> Array.filter (fun paragraph -> paragraph.Length < 100))
@@ -69,7 +63,7 @@ shortParagraphs
 |> Array.iter (printfn "%s")
 
 let histogramParagraphLength = 
-    rawDataset
+    rawDataset1
     |> Seq.collect (fun document -> 
         document.Transcript.Paragraphs
         |> Seq.map (fun paragraph -> float paragraph.Length))
@@ -92,65 +86,79 @@ type Label =
     | Negative
     | Neutral
 
+let parseLabel cumRet thresh = 
+    if cumRet > thresh then Positive 
+    elif cumRet < -thresh then Negative
+    else Neutral
+
 type LabeledTranscript = 
-    {TickerExchange : (string * string)
-     Label : Label
-     CumulativeReturn: float
-     Transcript : string}
-
-let parseLabel (cumRet: float): Label = 
-    let threshold = 0.05
-    if cumRet > threshold then 
-        Positive 
-    elif cumRet < -threshold then
-        Negative
-    else
-        Neutral
-
-let removeShortParagraphs (paragraphs: string []): string =
-    paragraphs
-    |> Seq.filter (fun p -> p.Length > 100)
-    |> String.concat (" ")
+    { TickerExchange: (string * string) 
+      EarningsCall: string
+      CumulativeReturn: float} with 
+      member this.Label = 
+        parseLabel this.CumulativeReturn 0.05
 
 let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
-    dataset
-    |> Seq.map (fun xs ->
-
-        let tickerExchange = (xs.Transcript.Ticker , xs.Transcript.Exchange)
-        let label = parseLabel xs.CumulativeReturn
-        let transcript = removeShortParagraphs xs.Transcript.Paragraphs
+    let labelTranscript (xs: AnnouncementDayReturn) = 
+        let tickerExchange = 
+            xs.Transcript.Ticker, xs.Transcript.Exchange
+        
+        let earningsCall = 
+            xs.Transcript.Paragraphs
+            |> Seq.filter (fun p -> p.Length > 100)
+            |> String.concat (" ")
 
         { TickerExchange = tickerExchange
-          Label = label
-          CumulativeReturn = xs.CumulativeReturn
-          Transcript = transcript})
+          EarningsCall = earningsCall
+          CumulativeReturn = xs.CumulativeReturn }
+    
+    (dataset |> Array.map labelTranscript)
 
-    |> Seq.toArray
+let myTranscripts1 = 
+    labelDataset rawDataset1
 
-let myTranscripts: LabeledTranscript [] = labelDataset rawDataset
+let myTranscripts2 = 
+    labelDataset rawDataset2
 
 (**
 ## Analyze dataset
 *)
 
 type LabelSummary = 
-    { Label : Label
-      Count : int
-      AvgCumRet : float }
+    { Label: Label
+      Count: int
+      AvgCumRet: float 
+      StDevCumRet: float }
 
-let analyzeLabel (label: Label): LabelSummary = 
-    let rets = 
-        myTranscripts 
-        |> Seq.filter (fun xs -> xs.Label = label)
-        |> Seq.map (fun xs -> xs.CumulativeReturn)
-        |> Seq.toArray
+let analyzeDatasetByLabel (dataset: LabeledTranscript []) 
+                          (label: Label): LabelSummary =     
+    let analyzeLabel label = 
+        let rets = 
+            dataset 
+            |> Seq.filter (fun xs -> xs.Label = label)
+            |> Seq.map (fun xs -> xs.CumulativeReturn)
+            |> Seq.toArray
+
+        let avgCumRet = 
+            rets 
+            |> Seq.average 
+            |> fun x -> Math.Round (x, 4)
+
+        let count = rets.Length
+        let stDevCumRet =  stDev rets 
+        
+        { Label = label
+          Count = count
+          AvgCumRet = avgCumRet 
+          StDevCumRet = stDevCumRet }
     
-    let count = rets.Length
-    let avgCumRet = Math.Round (Array.average rets, 4)
-      
-    { Label = label
-      Count = count
-      AvgCumRet = avgCumRet}
+    (label |> analyzeLabel)
+
+myTranscripts2
+|> Seq.map (fun xs -> xs.Label)
+|> Seq.distinct
+|> Seq.map (analyzeDatasetByLabel myTranscripts)
+|> Seq.toArray
 
 (**
 ## Cumulative returns, histogram
@@ -160,20 +168,7 @@ let retsByLabel (label: Label) =
     myTranscripts
     |> Seq.filter (fun xs -> xs.Label = label)
     |> Seq.map (fun xs -> xs.CumulativeReturn)
-    |> Seq.toArray
-
-let returnsDistribution =
-    myTranscripts
-    |> Seq.map (fun xs -> xs.Label)
-    |> Set.ofSeq
-    |> Seq.map (fun label -> 
-        let labelStats = analyzeLabel label
-        Chart.Histogram (data = retsByLabel label, 
-                         Name = $"{labelStats.Label} (N = {labelStats.Count}, Avg. = {labelStats.AvgCumRet})"))
-    |> Seq.toArray
-    |> Chart.Combine
-    |> Chart.withTitle "Histogram: Cumulative returns"
-    |> Chart.withSize (1000., 500.)
+    |> Seq.toArray  
 
 /// Chart.Show returnsDistribution
 (**
@@ -256,11 +251,10 @@ let train (docs: ('Label * string)[])
 *)
 
 let training, validation =
-
     let posOrNeg = 
         myTranscripts
         |> Seq.filter (fun xs -> xs.Label <> Neutral)
-        |> Seq.map (fun xs -> (xs.Label, xs.Transcript))
+        |> Seq.map (fun xs -> (xs.Label, xs.EarningsCall))
         |> Seq.toArray
 
     let cutoff = (float posOrNeg.Length) * 0.8 |> int
@@ -276,11 +270,11 @@ let vocabulary (tokenizer: Tokenizer) (corpus: string seq) =
     |> Seq.map tokenizer
     |> Set.unionMany
 
-let onlyWordsRegex = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
+let onlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
 
 let tokenizeAllWords (text: string) = 
     text
-    |> onlyWordsRegex.Matches
+    |> onlyWords.Matches
     |> Seq.cast<Match>
     |> Seq.map (fun m -> m.Value)
     |> Set.ofSeq
@@ -298,37 +292,44 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
     let classifier = train training tokenizer tokens
     validation
     |> Seq.averageBy (fun (label, text) -> 
-        if label = classifier text then 1.0 else 0.)
+        if label = classifier text then 1.0 
+        else 0.)
     |> printfn "Correctly classified: %.4f"
 
 (**
 ## N-Grams (DocTransformer)
 *)
 
-let onylWords (word: string): option<Match> = 
-    let candidateMatch = onlyWordsRegex.Match word
-    if candidateMatch.Success then Some (candidateMatch) else None
+let nGrams (n: int) (text: string): string [] = 
+    let candidateNGrams = 
+        text.Split(" ")
+        |> Array.windowed n
 
-let nGrams (n: int) (text: string): string[] = 
-    text.Split(" ")
-    |> Seq.windowed n
-    |> Seq.map (fun words -> 
-                words 
-                |> Seq.choose onylWords 
-                |> Seq.map (fun m -> m.Value) 
-                |> Seq.toArray)
-    |> Seq.filter (fun nGram -> nGram.Length = n)
-    |> Seq.map (String.concat(" "))
+    let getOnlyWords words =
+        let onlyWords word: option<Match> = 
+            let candidateMatch = onlyWordsRegex.Match word
+            if candidateMatch.Success then Some candidateMatch 
+            else None
+
+        words 
+        |> Seq.choose onlyWords
+        |> Seq.map (fun m -> m.Value) 
+
+    let tryNGram words = 
+        if (Seq.length words = n) then Some (String.concat(" ") words)
+        else None
+
+    candidateNGrams
+    |> Seq.map getOnlyWords
+    |> Seq.choose tryNGram
     |> Seq.toArray
 
 let twoGramsTokenizer (text: string): Set<string> = 
-    text 
-    |> nGrams 2
+    nGrams 2 text
     |> Set.ofArray
 
 let threeGramsTokenizer (text: string): Set<string> = 
-    text
-    |> nGrams 3
+    nGrams 3 text
     |> Set.ofArray
 
 /// Some tests
@@ -344,52 +345,43 @@ $n_{t,d}$ : number of times a term *t* is present in a document *d*.
 
 type DocTransfromer = string -> string []
 
-type TermFreq = 
-    {Term : string
-     Tf : float}
+type TermFreq = {Term: string; Tf: float}
 
 let tf (doc: string) 
        (docTransformer: DocTransfromer): TermFreq [] =
+    let getTf (terms: string []) = 
+        let nTerms = terms.Length |> float
+        terms
+        |> Seq.countBy id
+        |> Seq.map (fun (term, count) ->
+            let tf = (float count) / (nTerms)
+            { Term = term; Tf = tf })
+        |> Seq.toArray
     
-    let tokenizedDoc = docTransformer doc
-    let nTerms = float tokenizedDoc.Length
-   
-    tokenizedDoc
-    |> Seq.countBy id
-    |> Seq.map (fun (term, count) ->
-                let tf = (float count) / nTerms
-                {Term = term
-                 Tf = tf})
-    |> Seq.toArray
+    (docTransformer doc |> getTf)
 
 (**
 ## Inverse document frequency (IDF)
 $IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
 *)
 
-type InverseDocFreq = 
-    {Term : string
-     Idf : float}
+type InverseDocFreq = {Term: string; Idf: float}
 
-let idf (docs : string []) 
-        (docTransfromer: DocTransfromer): Map<string, InverseDocFreq> = 
-
+let idf (docs : string []) (docTransfromer: DocTransfromer) = 
     let numberOfDocsByTerm = 
             docs
             |> Seq.map docTransfromer
-            |> Seq.collect Seq.distinct
+            |> Seq.collect PSeq.distinct
             |> Seq.countBy id
-            |> Seq.toArray
-
-    let n = docs.Length
+            
+    let getIdf term docsWithTerm =
+        let n = docs.Length
+        let idf = log (float n / float docsWithTerm)
+        term, { Term = term; Idf = idf }
 
     numberOfDocsByTerm
-    |> Seq.map (fun (term, docsWithTerm) ->
-                let idf = log (float n / float docsWithTerm)
-                term, {Term = term
-                       Idf = idf})
-    |> Seq.toArray
-    |> Map.ofArray
+    |> Seq.map (fun (term, docsWithTerm) -> getIdf term docsWithTerm)
+    |> Map
 
 (**
 ## Term frequency - Inverse Document Frequency
@@ -400,22 +392,22 @@ the weights hence tend to filter out common terms.
 
 type TermFreqInverseDocFreq = 
     { Term: string
-      TfIdf: float}
+      TfIdf: float }
 
 let tfIdf (doc: string)
           (docTransformer : DocTransfromer)
-          (inverseDocFreq: Map<string, InverseDocFreq>) = 
-   
-   let docTermFrequency = tf doc docTransformer
-   
-   docTermFrequency
-   |> Seq.choose (fun xs -> 
-    match Map.tryFind xs.Term inverseDocFreq with
-    | None -> None
-    | Some ys -> let tfIdf = xs.Tf * ys.Idf 
-                 Some ({Term = xs.Term
-                        TfIdf = tfIdf}))
-    |> Seq.toArray
+          (inverseDocFreq: Map<string, InverseDocFreq>) =
+
+   let getTfIdf (tf: TermFreq) =
+        match Map.tryFind tf.Term inverseDocFreq with
+        | Some idf -> 
+            let tfIdf = tf.Tf * idf.Idf 
+            Some {Term = tf.Term; TfIdf = tfIdf}
+        | None -> None
+        
+   doc
+   |> tf docTransformer
+   |> Array.choose getTfIdf
 
 let tfIdfFromDoc (doc: string) 
                  (docTransformer: DocTransfromer)
@@ -429,7 +421,7 @@ let tfIdfFromDoc (doc: string)
 
 // Test docs
 let doc1 = snd training.[0]
-let docs1 = training |> Seq.take 200 |> Seq.map snd |> Seq.toArray
+let docs1 = training |> Seq.take 100 |> Seq.map snd |> Seq.toArray
 
 /// DocTransformers
 let oneGram: DocTransfromer = nGrams 1
@@ -452,7 +444,7 @@ let tfIdfDoc2 = tfIdf doc1 twoGrams idf2
 let tfIdfDoc3 = tfIdf doc1 threeGrams idf3
 
 /// Full sample test - TwoGrams
-let allDocs = training |> Seq.map snd |> Seq.toArray
+let allDocs = training |> Array.map snd
 let twoGramsIdf = idf allDocs twoGrams
 let threeGramsIdf = idf allDocs threeGrams
 let tfIdfDoc1FullSample = tfIdfFromDoc doc1 twoGrams twoGramsIdf
@@ -492,14 +484,12 @@ wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 /// TwoGrams
 let allDocsTwoGramsTfIdf = 
     allDocs
-    |> Seq.collect (fun doc -> tfIdfFromDoc doc twoGrams twoGramsIdf)
-    |> Seq.toArray
+    |> Array.collect (fun doc -> tfIdfFromDoc doc twoGrams twoGramsIdf)
 
 /// ThreeGrams
 let allDocsThreeGramsTfIdf = 
     allDocs
-    |> Seq.collect (fun doc -> tfIdfFromDoc doc threeGrams threeGramsIdf)
-    |> Seq.toArray
+    |> Array.collect (fun doc -> tfIdfFromDoc doc threeGrams threeGramsIdf)
 
 let description =
     let heading = "Comments"
@@ -545,22 +535,21 @@ let tfIdfNGramsTokenizer (tfIdfThresh : float)
                          (inverseDocFreq: Map<string, InverseDocFreq>)
                          (docTransformer: DocTransfromer) 
                          (doc: string) = 
-    
     let tdIdfofDoc = 
         tfIdf doc docTransformer inverseDocFreq
         |> Seq.map (fun xs -> xs.Term, xs)
-        |> Seq.toArray
-        |> Map.ofArray
+        |> Map
+    
+    let relevantTerm term = 
+        match Map.tryFind term tdIdfofDoc with 
+        | Some term when term.TfIdf > tfIdfThresh -> Some term.Term
+        | _ -> None
     
     doc
     |> docTransformer
     |> Seq.distinct
-    // TfIdfFilter
-    |> Seq.choose (fun term -> 
-                   match Map.tryFind term tdIdfofDoc with 
-                   | Some term -> if term.TfIdf > tfIdfThresh then Some (term.Term) else None
-                   | _ -> None)
-    |> Set.ofSeq
+    |> Seq.choose relevantTerm
+    |> Set
 
 (**
 # Tokenizer evaluation
@@ -588,7 +577,7 @@ evaluate threeGramsTokenizer threeGramsTokens
 - Threshold -> Hyperparameter ? 
 *)
 
-/// Evaluate TfIdf + twoGrams Tokenizer ->  0.7756 (Cumulative return threshold -> abs 0.5, TfIdfThesh = 0.0005)
+/// Evaluate TfIdf + twoGrams Tokenizer ->  0.7756 (Cumulative return threshold -> abs 0.05, TfIdfThesh = 0.0005)
 let twoGramsTransformer = nGrams 2
 let trainingTwoGramsIdf = idf allDocs twoGramsTransformer
 let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer 0.0005 trainingTwoGramsIdf twoGramsTransformer
@@ -596,7 +585,7 @@ let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer 0.0005 trainingTwoGramsIdf two
 let tfIdfTwoGramsTokens = applyTokenizer tfIdfTwoGramsTokenzier
 evaluate tfIdfTwoGramsTokenzier tfIdfTwoGramsTokens
 
-/// Evaluate TfIdf + threeGrams Tokenizer ->  0.6923 (Cumulative return threshold -> abs 0.5, TfIdfThresh = 0.0008)
+/// Evaluate TfIdf + threeGrams Tokenizer ->  0.6923 (Cumulative return threshold -> abs 0.05, TfIdfThresh = 0.0008)
 let threeGramsTransformer = nGrams 3
 let trainingThreeGramsIdf = idf allDocs threeGramsTransformer
 let tfIdfThreeGramsTokenzier = tfIdfNGramsTokenizer 0.001 trainingThreeGramsIdf threeGramsTransformer

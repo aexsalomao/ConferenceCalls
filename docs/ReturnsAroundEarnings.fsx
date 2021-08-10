@@ -37,20 +37,17 @@ For example:
 ## Import packages and load scripts
 *)
 
-#r "nuget: FSharp.Data"
-#r "nuget: Newtonsoft.Json"
-#r "nuget: Plotly.NET, 2.0.0-preview.6"
-
 #load "TranscriptParsing.fsx"
 #load "Common.fsx"
 
-open System
-open FSharp.Data
-open Newtonsoft.Json
-open Plotly.NET
+#r "nuget: Plotly.NET, 2.0.0-preview.6"
 
 open TranscriptParsing
 open Common
+
+open System
+open Newtonsoft.Json
+open Plotly.NET
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
@@ -67,6 +64,7 @@ let readJson (jsonFile: string) =
 /// Transcripts data
 let myTranscripts = 
     readJson ("data-cache/TranscriptsDemo.json")
+    |> Seq.take 100
     |> Seq.toArray
 
 (**
@@ -113,10 +111,6 @@ let tiingoReturns (tiingoStart: DateTime)
 ### Benchmark sample (SP500, "SPY")
 *)
 
-(**
-SP500
-*)
-
 /// Sample range
 let startSample, endSample =    
     myTranscripts
@@ -129,6 +123,7 @@ let spyObs =
         rets
         |> Array.map (fun xs -> xs.Date, xs.Return)
         |> Map
+    
     let checkSpy rets =
         match rets with 
         | None -> failwith "why isn't Tiingo working"
@@ -165,8 +160,9 @@ type ReturnsWindow =
 let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option = 
     let minusOneWeek, plusOneWeek = 
         let flatDate = transcript.Date.Date
-        flatDate.AddDays(-7.0), flatDate.AddDays(7.0)    
-    let retsAroundEarnings (rets: ReturnObs []): ReturnsWindow = 
+        flatDate.AddDays(-7.0), flatDate.AddDays(7.0)
+
+    let retsAroundEarnings rets: ReturnsWindow = 
         { Transcript = transcript
           ReturnsAroundEarnings = rets }
           
@@ -180,7 +176,6 @@ let twoWeekReturnWindow (transcript: Transcript): ReturnsWindow option =
 
 /// Find first observed return
 let firstReturnAfterCall (obs: ReturnsWindow): ReturnObs option =
-     
     let dateOfCall = 
         let date = obs.Transcript.Date
         if date.Hour < 16 then date.Date else date.Date.AddDays(1.0)
@@ -241,7 +236,7 @@ let adjustedReturns (stock : ReturnObs []) : float =
 
 /// Finds three-day window of adjusted returns and computes cumulative returns
 let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn option =
-    let findRetWindows (stockObs:ReturnsWindow Option) =
+    let findRetWindows (stockObs: ReturnsWindow Option) =
         stockObs
         |> Option.map(fun stockObs ->
             match firstReturnAfterCall stockObs with
@@ -259,8 +254,8 @@ let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn opti
     transcript
     |> twoWeekReturnWindow
     |> findRetWindows
+    |> Option.map getAdjustedReturns
     |> Option.flatten
-    |> getAdjustedReturns
 
 (**
 #### Compute cumualtive returns
@@ -283,4 +278,4 @@ let AnnouncementDayReturnToJson (fileName: string) (transcripts: AnnouncementDay
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
-AnnouncementDayReturnToJson "data-cache/AnnouncementDayReturnsDemo.json" myReturns
+AnnouncementDayReturnToJson "data-cache/ReturnsAroundEarningsDemo.json" myReturns
