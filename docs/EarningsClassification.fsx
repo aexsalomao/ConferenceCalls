@@ -3,28 +3,42 @@
 *)
 
 (**
+After dowloading earnings transcripts from Motley Fool, we computed the *excess* cumulative return 
+of each respective company around its earnings call (see `ReturnsAroundEarnings.fsx`).
+We can use these cumulative returns as a way to label or filter "bad" earnings calls from "good" earnings calls. 
+
+In other words, using machine learning lingo, we will use these cumualtive returns to artificially build a target variable, call it `Label`.
+Each transcript's `Label` will be modeled as a discriminated union with three cases: `Positive`, `Negative`, and `Neutral`. 
+This is a rational decision, as the *excess* cumulative returns are a good proxy for measuring the market's view on earnings calls.
+Likewise, the entire feature set will be constructed from the collected transcripts.
+
+Our goal will be to correctly *classify* each transcript's `Label` according to the content provided from each transcript.
+
+*)
+
+(**
 ## Import packages and load scripts
 *)
 
 #r "nuget: FSharp.Collections.ParallelSeq"
 #r "nuget: FSharp.Stats"
 
-#load "TranscriptParsing.fsx"
-#load "ReturnsAroundEarnings.fsx" 
-
 open System
 open System.Text.RegularExpressions
 open FSharp.Collections.ParallelSeq
-open FSharp.Data
-open Newtonsoft.Json
-open Plotly.NET
-open FSharp.Stats
+
+Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
+fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
+
+#load "ReturnsAroundEarnings.fsx" 
 
 open TranscriptParsing
 open ReturnsAroundEarnings
 
-Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
-fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
+open FSharp.Data
+open Newtonsoft.Json
+open Plotly.NET
+open FSharp.Stats
 
 (**
 ## Read transcripts from json file
@@ -34,26 +48,27 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let rawDataset1 = 
-    readJson ("data-cache/ReturnsAroundCall2500.json")
-    |> Seq.toArray
- 
-let rawDataset2 = 
+let rawDataset = 
+    let rnd = System.Random()
     readJson ("data-cache/ReturnsAroundEarningsFullSample.json")
-    |> Seq.take 2500
+    |> Seq.sortBy (fun _ -> rnd.Next())
+    |> Seq.take 5000
     |> Seq.toArray
 
 (**
-# Analyzing paragraphs
+## Removing noise from feature set
 *)
 
 (**
 Some paragraphs are longer than others, and some paragraphs aren't even real paragraphs. 
 One-liners like opening and closing remarks add noise to our dataset and should be taken care of.
+We can filter for short paragraphs by counting the number of characters present in each paragraph. 
+On average, a paragraph contains 3-4 sentences and each sentence contains about 75-100 characters. 
 *)
 
+/// Filter paragraphs by character count
 let shortParagraphs = 
-    rawDataset1
+    rawDataset
     |> Array.collect (fun xs -> 
         xs.Transcript.Paragraphs 
         |> Array.filter (fun paragraph -> paragraph.Length < 100))
@@ -62,23 +77,8 @@ shortParagraphs
 |> Array.take 10
 |> Array.iter (printfn "%s")
 
-let histogramParagraphLength = 
-    rawDataset1
-    |> Seq.collect (fun document -> 
-        document.Transcript.Paragraphs
-        |> Seq.map (fun paragraph -> float paragraph.Length))
-    // Purely for visualization purposes
-    |> Seq.filter (fun charCount -> charCount < 1250.)
-    |> Seq.toArray
-    |> Chart.Histogram
-    |> Chart.withX_AxisStyle "Number of characters per paragraph"
-    |> Chart.withY_AxisStyle "Frequency"
-    |> Chart.withTitle "Histogram: Number of characters per paragraph"
-    |> Chart.withSize(500., 500.)
-
-/// Chart.Show histogramParagraphLength
 (**
-# Labeled Transcript
+## Labeled Transcript
 *)
 
 type Label = 
@@ -86,9 +86,11 @@ type Label =
     | Negative
     | Neutral
 
-let parseLabel cumRet thresh = 
-    if cumRet > thresh then Positive 
+/// Label from cumulative return
+let labelFromRet cumRet thresh = 
+    if cumRet > thresh then Positive
     elif cumRet < -thresh then Negative
+    elif abs cumRet <= abs thresh then Neutral
     else Neutral
 
 type LabeledTranscript = 
@@ -96,83 +98,61 @@ type LabeledTranscript =
       EarningsCall: string
       CumulativeReturn: float} with 
       member this.Label = 
-        parseLabel this.CumulativeReturn 0.05
+        // Label
+        labelFromRet this.CumulativeReturn 0.1
 
 let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
-    let labelTranscript (xs: AnnouncementDayReturn) = 
-        let tickerExchange = 
-            xs.Transcript.Ticker, xs.Transcript.Exchange
+    
+    dataset 
+    |> Array.map (fun xs -> 
+        let tickerExchange = xs.Transcript.Ticker, xs.Transcript.Exchange
         
         let earningsCall = 
             xs.Transcript.Paragraphs
-            |> Seq.filter (fun p -> p.Length > 100)
+            |> Seq.filter (fun p -> p.Length > 100) // Keep long paragraphs
+            |> Seq.skip 1 // Usually another (longer) opening statement from the "Operator"
             |> String.concat (" ")
 
         { TickerExchange = tickerExchange
           EarningsCall = earningsCall
-          CumulativeReturn = xs.CumulativeReturn }
-    
-    (dataset |> Array.map labelTranscript)
+          CumulativeReturn = xs.CumulativeReturn })
 
-let myTranscripts1 = 
-    labelDataset rawDataset1
-
-let myTranscripts2 = 
-    labelDataset rawDataset2
+let allTranscripts = labelDataset rawDataset
 
 (**
-## Analyze dataset
+## Cumulative returns distribution
 *)
 
-type LabelSummary = 
-    { Label: Label
-      Count: int
-      AvgCumRet: float 
-      StDevCumRet: float }
-
-let analyzeDatasetByLabel (dataset: LabeledTranscript []) 
-                          (label: Label): LabelSummary =     
-    let analyzeLabel label = 
+/// Builds cumulative return histogram
+let returnsHist (transcripts: LabeledTranscript []) = 
+    let makeChartFromLabel label = 
         let rets = 
-            dataset 
+            transcripts
             |> Seq.filter (fun xs -> xs.Label = label)
             |> Seq.map (fun xs -> xs.CumulativeReturn)
             |> Seq.toArray
-
-        let avgCumRet = 
-            rets 
-            |> Seq.average 
-            |> fun x -> Math.Round (x, 4)
-
-        let count = rets.Length
-        let stDevCumRet =  stDev rets 
         
-        { Label = label
-          Count = count
-          AvgCumRet = avgCumRet 
-          StDevCumRet = stDevCumRet }
-    
-    (label |> analyzeLabel)
+        let legendData = 
+            let count = rets.Length 
+            let avgRet = Array.average rets
+            let stDevRet = stDev rets
+            $"{label} (N = {count}, Avg. = {Math.Round(avgRet, 4)}, Std. = {Math.Round(stDevRet, 4)})"
 
-myTranscripts2
-|> Seq.map (fun xs -> xs.Label)
-|> Seq.distinct
-|> Seq.map (analyzeDatasetByLabel myTranscripts)
-|> Seq.toArray
+        Chart.Histogram (rets |> Array.filter (fun x -> abs x <= 0.5), Name=legendData)
+
+    transcripts
+    |> Seq.map (fun xs -> xs.Label)
+    |> Seq.distinct
+    |> Seq.map makeChartFromLabel
+    |> Seq.toArray
+    |> Chart.Combine
+    |> Chart.withTitle "Excess cumulative returns"
+    |> Chart.withSize (1250., 750.)
+
+returnsHist allTranscripts |> Chart.Show
 
 (**
-## Cumulative returns, histogram
-*)
-
-let retsByLabel (label: Label) = 
-    myTranscripts
-    |> Seq.filter (fun xs -> xs.Label = label)
-    |> Seq.map (fun xs -> xs.CumulativeReturn)
-    |> Seq.toArray  
-
-/// Chart.Show returnsDistribution
-(**
-# Naive Bayes Module
+## Naive Bayes Module
 *)
 
 type Token = string
@@ -250,9 +230,14 @@ let train (docs: ('Label * string)[])
 ## Dataset split
 *)
 
+(**
+80% -> training
+20% -> validation
+*)
+
 let training, validation =
     let posOrNeg = 
-        myTranscripts
+        allTranscripts
         |> Seq.filter (fun xs -> xs.Label <> Neutral)
         |> Seq.map (fun xs -> (xs.Label, xs.EarningsCall))
         |> Seq.toArray
@@ -260,6 +245,10 @@ let training, validation =
     let cutoff = (float posOrNeg.Length) * 0.8 |> int
 
     posOrNeg.[.. cutoff], posOrNeg.[cutoff + 1 ..]
+
+
+training.Length
+validation.Length
 
 (**
 ## Tokenizer
@@ -307,7 +296,7 @@ let nGrams (n: int) (text: string): string [] =
 
     let getOnlyWords words =
         let onlyWords word: option<Match> = 
-            let candidateMatch = onlyWordsRegex.Match word
+            let candidateMatch = onlyWords.Match word
             if candidateMatch.Success then Some candidateMatch 
             else None
 
@@ -330,7 +319,7 @@ let twoGramsTokenizer (text: string): Set<string> =
 
 let threeGramsTokenizer (text: string): Set<string> = 
     nGrams 3 text
-    |> Set.ofArray
+    |> Set
 
 /// Some tests
 let woodpecker = "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
@@ -345,42 +334,44 @@ $n_{t,d}$ : number of times a term *t* is present in a document *d*.
 
 type DocTransfromer = string -> string []
 
-type TermFreq = {Term: string; Tf: float}
+type Stat = 
+    | Tf of float
+    | Idf of float
+    | TfIdf of float
 
-let tf (doc: string) 
-       (docTransformer: DocTransfromer): TermFreq [] =
-    let getTf (terms: string []) = 
-        let nTerms = terms.Length |> float
-        terms
-        |> Seq.countBy id
-        |> Seq.map (fun (term, count) ->
-            let tf = (float count) / (nTerms)
-            { Term = term; Tf = tf })
-        |> Seq.toArray
-    
-    (docTransformer doc |> getTf)
+type TermStat = 
+    { Term: string 
+      Stat: Stat } 
+
+let tf (docTransformer: DocTransfromer) (doc: string): TermStat [] =
+    let terms = docTransformer doc
+    let nTerms = float terms.Length
+
+    terms
+    |> Seq.countBy id
+    |> Seq.map (fun (term, count) ->
+        let tf = (float count) / (nTerms)
+        {Term = term; Stat = Tf tf})
+    |> Seq.toArray
 
 (**
 ## Inverse document frequency (IDF)
 $IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
 *)
 
-type InverseDocFreq = {Term: string; Idf: float}
-
-let idf (docs : string []) (docTransfromer: DocTransfromer) = 
+let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermStat> = 
+    let n = docs.Length
+    
     let numberOfDocsByTerm = 
-            docs
-            |> Seq.map docTransfromer
-            |> Seq.collect PSeq.distinct
-            |> Seq.countBy id
-            
-    let getIdf term docsWithTerm =
-        let n = docs.Length
-        let idf = log (float n / float docsWithTerm)
-        term, { Term = term; Idf = idf }
-
+        docs
+        |> Seq.map docTransfromer
+        |> Seq.collect Seq.distinct
+        |> Seq.countBy id
+      
     numberOfDocsByTerm
-    |> Seq.map (fun (term, docsWithTerm) -> getIdf term docsWithTerm)
+    |> Seq.map (fun (term, docsWithTerm) -> 
+        let idf = log (float n / float docsWithTerm)
+        term, {Term = term; Stat = Idf idf})
     |> Map
 
 (**
@@ -390,30 +381,26 @@ A high weight in tf–idf is reached by a high term frequency (in the given docu
 the weights hence tend to filter out common terms.
 *)
 
-type TermFreqInverseDocFreq = 
-    { Term: string
-      TfIdf: float }
+let tfIdf (docTransformer : DocTransfromer)
+          (inverseDocFreq: Map<string, TermStat>)
+          (doc: string): TermStat [] =
 
-let tfIdf (doc: string)
-          (docTransformer : DocTransfromer)
-          (inverseDocFreq: Map<string, InverseDocFreq>) =
+   let getTfIdf termTf = 
+       let computeTfIdf termIdf = 
+            match termTf.Stat, termIdf.Stat with
+            | Tf tf, Idf idf -> 
+                let tfIdf = tf * idf
+                Some { Term = termIdf.Term 
+                       Stat = TfIdf idf }
+            | _ -> None
 
-   let getTfIdf (tf: TermFreq) =
-        match Map.tryFind tf.Term inverseDocFreq with
-        | Some idf -> 
-            let tfIdf = tf.Tf * idf.Idf 
-            Some {Term = tf.Term; TfIdf = tfIdf}
-        | None -> None
-        
+       inverseDocFreq.TryFind termTf.Term
+       |> Option.map computeTfIdf
+       |> Option.flatten
+            
    doc
    |> tf docTransformer
    |> Array.choose getTfIdf
-
-let tfIdfFromDoc (doc: string) 
-                 (docTransformer: DocTransfromer)
-                 (inverseDocFreq: Map<string, InverseDocFreq>) =
-
-    tfIdf doc docTransformer inverseDocFreq
 
 (**
 ## Tf-Idf tests
@@ -421,61 +408,48 @@ let tfIdfFromDoc (doc: string)
 
 // Test docs
 let doc1 = snd training.[0]
-let docs1 = training |> Seq.take 100 |> Seq.map snd |> Seq.toArray
+let allDocs = training |> Array.map snd |> Seq.toArray
 
-/// DocTransformers
-let oneGram: DocTransfromer = nGrams 1
-let twoGrams: DocTransfromer = nGrams 2
-let threeGrams: DocTransfromer = nGrams 3
-
-/// Tf test
-tf doc1 oneGram
-tf doc1 twoGrams
-tf doc1 threeGrams
-
-/// Idf test
-let idf1 = idf docs1 oneGram
-let idf2 = idf docs1 twoGrams
-let idf3 = idf docs1 threeGrams
-
-/// Tf-Idf test
-let tfIdfDoc1 = tfIdf doc1 oneGram idf1
-let tfIdfDoc2 = tfIdf doc1 twoGrams idf2
-let tfIdfDoc3 = tfIdf doc1 threeGrams idf3
-
-/// Full sample test - TwoGrams
-let allDocs = training |> Array.map snd
-let twoGramsIdf = idf allDocs twoGrams
-let threeGramsIdf = idf allDocs threeGrams
-let tfIdfDoc1FullSample = tfIdfFromDoc doc1 twoGrams twoGramsIdf
+/// Tests
+let twoGrams = nGrams 2 // DocTransformer
+let tfDoc1 = tf twoGrams doc1 // Tf test
+let idfTwoGrams = idf twoGrams allDocs // Idf test
+let tfIdfDoc1 = tfIdf twoGrams idfTwoGrams doc1 // TfIdf test
 
 (**
 # Word bar chart - Doc1
 *)
 
 let lowTfIdfWords = 
-    tfIdfDoc1FullSample
-    |> Seq.sortBy (fun xs -> xs.TfIdf)
+    tfIdfDoc1
+    |> Seq.sortBy (fun xs -> xs.Stat)
+    |> Seq.distinctBy (fun xs -> xs.Stat)
     |> Seq.take 25
-    |> Seq.sortByDescending (fun xs -> xs.TfIdf)
     |> Seq.toArray
 
 let highTfIdfWords = 
-    tfIdfDoc1FullSample 
-    |> Seq.sortByDescending (fun xs -> xs.TfIdf)
+    tfIdfDoc1
+    |> Seq.sortByDescending (fun xs -> xs.Stat)
+    |> Seq.distinctBy (fun xs -> xs.Stat)
     |> Seq.take 25
+    |> Seq.rev
     |> Seq.toArray
 
-let wordBarChart (words : TermFreqInverseDocFreq []) (title: string) = 
+let wordBarChart (words : TermStat []) (title: string) = 
     words
-    |> Seq.map (fun xs -> xs.Term, xs.TfIdf)
+    |> Seq.map (fun xs -> 
+        match xs.Term, xs.Stat with 
+        | term, TfIdf tfIdf when tfIdf > 0.-> 
+            Some(term, tfIdf)
+        | _ -> None)
+    |> Seq.choose id
     |> Seq.toArray
     |> Chart.Column
     |> Chart.withTitle title
-    |> Chart.withSize (500., 750.)
+    |> Chart.withSize (1250., 500.)
 
-wordBarChart lowTfIdfWords "Low Tf-Idf words (Common and rare words)" |> Chart.Show
-wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
+/// wordBarChart lowTfIdfWords "Low Tf-Idf words (Common words)" |> Chart.Show
+/// wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 
 (**
 # Tf-idf histogram
@@ -484,12 +458,7 @@ wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 /// TwoGrams
 let allDocsTwoGramsTfIdf = 
     allDocs
-    |> Array.collect (fun doc -> tfIdfFromDoc doc twoGrams twoGramsIdf)
-
-/// ThreeGrams
-let allDocsThreeGramsTfIdf = 
-    allDocs
-    |> Array.collect (fun doc -> tfIdfFromDoc doc threeGrams threeGramsIdf)
+    |> Array.collect (fun doc -> tfIdf twoGrams idfTwoGrams doc)
 
 let description =
     let heading = "Comments"
@@ -504,11 +473,15 @@ let description =
 
     ChartDescription.create heading description
 
-let tfIdfHistogram (termsWithTfIdf: TermFreqInverseDocFreq [])
+let tfIdfHistogram (terms: TermStat [])
                    (description: ChartDescription)
                    (title: string) =
-    termsWithTfIdf
-    |> Seq.map (fun xs -> xs.TfIdf)
+    terms
+    |> Seq.map (fun xs -> 
+        match xs.Stat with
+        | TfIdf tfIdf -> Some tfIdf
+        | _ -> None)
+    |> Seq.choose id
     // For vizualization purposes
     |> Seq.filter (fun x -> x < 0.005)
     |> Seq.toArray
@@ -520,31 +493,32 @@ let tfIdfHistogram (termsWithTfIdf: TermFreqInverseDocFreq [])
     |> Chart.withSize (600., 600.)
 
 let twoGramsHist = tfIdfHistogram allDocsTwoGramsTfIdf description "2-Grams"
-let threeGramsHist = tfIdfHistogram allDocsThreeGramsTfIdf description "3-Grams"
 
-Chart.Show twoGramsHist
-Chart.Show threeGramsHist
+/// Chart.Show twoGramsHist
 
-twoGramsHist |> Chart.SaveHtmlAs "data-cache/2GramsHist"
+/// twoGramsHist |> Chart.SaveHtmlAs "data-cache/2GramsHist"
 
 (**
 # Tf-Idf + NGrams Tokenizer
 *)
 
-let tfIdfNGramsTokenizer (tfIdfThresh : float)
-                         (inverseDocFreq: Map<string, InverseDocFreq>)
-                         (docTransformer: DocTransfromer) 
-                         (doc: string) = 
+let tfIdfNGramsTokenizer (docTransformer: DocTransfromer) 
+                         (inverseDocFreq: Map<string, TermStat>)
+                         (tfIdfThresh : float) 
+                         (doc: string)= 
     let tdIdfofDoc = 
-        tfIdf doc docTransformer inverseDocFreq
+        tfIdf docTransformer inverseDocFreq doc
         |> Seq.map (fun xs -> xs.Term, xs)
         |> Map
     
     let relevantTerm term = 
-        match Map.tryFind term tdIdfofDoc with 
-        | Some term when term.TfIdf > tfIdfThresh -> Some term.Term
-        | _ -> None
-    
+        tdIdfofDoc.TryFind term
+        |> Option.map (fun term -> 
+            match term.Stat with
+            | TfIdf tfIdf when tfIdf > tfIdfThresh -> Some term.Term
+            | _ -> None )
+        |> Option.flatten
+        
     doc
     |> docTransformer
     |> Seq.distinct
@@ -556,43 +530,17 @@ let tfIdfNGramsTokenizer (tfIdfThresh : float)
 ## Simple Tokenizer (Regex single word)
 *)
 
-/// Evaluate simple tokenizer -> 0.7126 (Cumulative return threshold -> abs 0.05)
 let allTokens = applyTokenizer tokenizeAllWords
 evaluate tokenizeAllWords allTokens
 
 (**
-## NGrams Tokenizer
+### Tf-Idf + NGrams Tokenizer
 *)
 
-/// Evaluate TwoGrams -> 0.7480 (Cumulative return threshold -> abs 0.5)
-let twoGramsTokens = applyTokenizer twoGramsTokenizer
-evaluate twoGramsTokenizer twoGramsTokens
-
-/// Evaluate ThreeGrams -> 0.7559 (Cumulative return threshold -> abs 0.5)
-let threeGramsTokens = applyTokenizer threeGramsTokenizer
-evaluate threeGramsTokenizer threeGramsTokens
-
-(**
-# Tf-Idf + NGrams Tokenizer
-- Threshold -> Hyperparameter ? 
-*)
-
-/// Evaluate TfIdf + twoGrams Tokenizer ->  0.7756 (Cumulative return threshold -> abs 0.05, TfIdfThesh = 0.0005)
+/// Evaluate TfIdf + twoGrams Tokenizer 
 let twoGramsTransformer = nGrams 2
-let trainingTwoGramsIdf = idf allDocs twoGramsTransformer
-let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer 0.0005 trainingTwoGramsIdf twoGramsTransformer
+let trainingTwoGramsIdf = idf twoGramsTransformer allDocs
+let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer twoGramsTransformer trainingTwoGramsIdf 0.07
 
 let tfIdfTwoGramsTokens = applyTokenizer tfIdfTwoGramsTokenzier
 evaluate tfIdfTwoGramsTokenzier tfIdfTwoGramsTokens
-
-/// Evaluate TfIdf + threeGrams Tokenizer ->  0.6923 (Cumulative return threshold -> abs 0.05, TfIdfThresh = 0.0008)
-let threeGramsTransformer = nGrams 3
-let trainingThreeGramsIdf = idf allDocs threeGramsTransformer
-let tfIdfThreeGramsTokenzier = tfIdfNGramsTokenizer 0.001 trainingThreeGramsIdf threeGramsTransformer
-
-let tfIdfThreeGramsTokens = applyTokenizer tfIdfThreeGramsTokenzier
-evaluate tfIdfThreeGramsTokenzier tfIdfThreeGramsTokens
-
-(**
-## Positive, Negative words analysis
-*)
