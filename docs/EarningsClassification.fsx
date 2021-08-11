@@ -30,6 +30,7 @@ open FSharp.Collections.ParallelSeq
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
+#load "TranscriptParsing.fsx"
 #load "ReturnsAroundEarnings.fsx" 
 
 open TranscriptParsing
