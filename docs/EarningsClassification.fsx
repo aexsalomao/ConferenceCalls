@@ -98,8 +98,7 @@ let shortParagraphs =
 shortParagraphs
 |> Array.take 5
 |> Array.iter (printfn "%s")
-
-(*** include-it ***)
+(*** include-output***)
 
 (**
 ## Labelling transcripts: Market sentiment
@@ -178,6 +177,8 @@ returnsHist allTranscripts |> GenericChart.toChartHTML
 
 (**
 ## Naive Bayes Module
+
+- [Source: Mathias Brandewinder (Github)](https://github.com/mathias-brandewinder/machine-learning-projects-for-dot-net-developers/tree/master/chapter-2/SpamOrHam) 
 *)
 
 type Token = string
@@ -188,6 +189,7 @@ type DocGroup =
     { Proportion : float
       TokenFrequencies : Map<Token, float> }
 
+/// Scoring a document
 let tokenScore (group: DocGroup) (token: Token) =
     if group.TokenFrequencies.ContainsKey token
     then log group.TokenFrequencies.[token]
@@ -198,6 +200,7 @@ let score (document: TokenizedDoc) (group: DocGroup) =
     log group.Proportion + 
     (document |> Seq.sumBy scoreToken)
 
+/// Predicting a label of a document
 let classify (labelGroups: ('Label * DocGroup)[])
              (tokenizer: Tokenizer)
              (txt: string) = 
@@ -216,6 +219,7 @@ let countIn (docs: TokenizedDoc seq) (token: Token) =
     |> Seq.filter (Set.contains token)
     |> Seq.length
 
+/// Analyzing a group of documents
 let analyze (docsThisLabel: TokenizedDoc seq)
             (nTotalDocs: int)
             (vocabulary: Token Set) =
@@ -232,6 +236,7 @@ let analyze (docsThisLabel: TokenizedDoc seq)
     { Proportion = labelProportion 
       TokenFrequencies = scoredTokens }
 
+/// Learning from documents
 let learn (docs: ('Label * string)[])
           (tokenizer: Tokenizer)
           (vocabulary: Token Set) =
@@ -252,12 +257,7 @@ let train (docs: ('Label * string)[])
     classifier
 
 (**
-## Dataset split
-*)
-
-(**
-80% -> training
-20% -> validation
+## Training and evaluation sets
 *)
 
 let training, validation =
@@ -267,16 +267,23 @@ let training, validation =
         |> Seq.map (fun xs -> (xs.Label, xs.EarningsCall))
         |> Seq.toArray
 
-    let cutoff = (float posOrNeg.Length) * 0.8 |> int
-
-    posOrNeg.[.. cutoff], posOrNeg.[cutoff + 1 ..]
-
+    let cutoff = (float posOrNeg.Length) * 0.8
+    
+    posOrNeg.[.. int cutoff], posOrNeg.[int cutoff + 1 ..]
 
 training.Length
 validation.Length
 
 (**
-## Tokenizer
+## Text processing: tokenization
+*)
+
+(**
+**Tokenization** is a step which splits longer strings of text into smaller
+pieces, or **tokens**. Large chunks of text can be tokenized into sentences,
+sentences can be tokenized into words, etc.
+
+Such tokens are then used to compute a documents score as seen in the `score` function ...
 *)
 
 let vocabulary (tokenizer: Tokenizer) (corpus: string seq) = 
@@ -311,58 +318,56 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
     |> printfn "Correctly classified: %.4f"
 
 (**
-## N-Grams (DocTransformer)
+## Feature engineering: N-Grams
+*)
+
+(**
+The most common tokenization process is whitespace/unigram tokenization
 *)
 
 let nGrams (n: int) (text: string): string [] = 
-    let candidateNGrams = 
-        text.Split(" ")
-        |> Array.windowed n
+    let findWords words =
 
-    let getOnlyWords words =
-        let onlyWords word: option<Match> = 
+        let isWord word = 
             let candidateMatch = onlyWords.Match word
             if candidateMatch.Success then Some candidateMatch 
             else None
 
-        words 
-        |> Seq.choose onlyWords
-        |> Seq.map (fun m -> m.Value) 
+        words
+        |> Seq.choose isWord
+        |> Seq.map (fun m -> m.Value)
 
     let tryNGram words = 
-        if (Seq.length words = n) then Some (String.concat(" ") words)
+        if (words |> Seq.length = n) then Some (words |> String.concat(" "))
         else None
 
-    candidateNGrams
-    |> Seq.map getOnlyWords
+    text.Split(" ")
+    |> Seq.windowed n
+    |> Seq.map findWords
     |> Seq.choose tryNGram
     |> Seq.toArray
 
 let twoGramsTokenizer (text: string): Set<string> = 
-    nGrams 2 text
-    |> Set.ofArray
-
-let threeGramsTokenizer (text: string): Set<string> = 
-    nGrams 3 text
+    text
+    |> nGrams 2
     |> Set
 
 /// Some tests
 let woodpecker = "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
-let twoGramsTest = twoGramsTokenizer woodpecker
-let threeGramsTest = threeGramsTokenizer woodpecker
+twoGramsTokenizer woodpecker
 
 (**
 ## Term Frequency (TF)
 $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
-$n_{t,d}$ : number of times a term *t* is present in a document *d*.
+$n_{t,d}$ : number of times a term *t* is present in a document *d*.$
 *)
 
 type DocTransfromer = string -> string []
 
 type Stat = 
-    | Tf of float
-    | Idf of float
-    | TfIdf of float
+    | TermFreq of float
+    | InvDocFreq of float
+    | TermFreqInvDocFreq of float
 
 type TermStat = 
     { Term: string 
@@ -375,13 +380,13 @@ let tf (docTransformer: DocTransfromer) (doc: string): TermStat [] =
     terms
     |> Seq.countBy id
     |> Seq.map (fun (term, count) ->
-        let tf = (float count) / (nTerms)
-        {Term = term; Stat = Tf tf})
+        let tf = TermFreq ((float count) / (nTerms))
+        {Term = term; Stat = tf})
     |> Seq.toArray
 
 (**
 ## Inverse document frequency (IDF)
-$IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})
+$IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})$
 *)
 
 let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermStat> = 
@@ -395,8 +400,9 @@ let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermSta
       
     numberOfDocsByTerm
     |> Seq.map (fun (term, docsWithTerm) -> 
-        let idf = log (float n / float docsWithTerm)
-        term, {Term = term; Stat = Idf idf})
+        let idf = InvDocFreq (log (float n / float docsWithTerm))
+        term, { Term = term
+                Stat = idf})
     |> Map
 
 (**
@@ -411,12 +417,14 @@ let tfIdf (docTransformer : DocTransfromer)
           (doc: string): TermStat [] =
 
    let getTfIdf termTf = 
+
        let computeTfIdf termIdf = 
             match termTf.Stat, termIdf.Stat with
-            | Tf tf, Idf idf -> 
-                let tfIdf = tf * idf
-                Some { Term = termIdf.Term 
-                       Stat = TfIdf idf }
+            | TermFreq tf, InvDocFreq idf -> 
+                let term = termIdf.Term
+                let tfIdf = TermFreqInvDocFreq (tf * idf)
+                Some { Term = term 
+                       Stat =  tfIdf }
             | _ -> None
 
        inverseDocFreq.TryFind termTf.Term
@@ -445,6 +453,19 @@ let tfIdfDoc1 = tfIdf twoGrams idfTwoGrams doc1 // TfIdf test
 # Word bar chart - Doc1
 *)
 
+let wordBarChart (words : TermStat []) (title: string) = 
+    words
+    |> Seq.map (fun xs -> 
+        match xs.Term, xs.Stat with 
+        | term, TermFreqInvDocFreq tfIdf when tfIdf > 0.-> 
+            Some(term, tfIdf)
+        | _ -> None)
+    |> Seq.choose id
+    |> Seq.toArray
+    |> Chart.Column
+    |> Chart.withTitle title
+    |> Chart.withSize (1250., 500.)
+
 let lowTfIdfWords = 
     tfIdfDoc1
     |> Seq.sortBy (fun xs -> xs.Stat)
@@ -458,20 +479,7 @@ let highTfIdfWords =
     |> Seq.distinctBy (fun xs -> xs.Stat)
     |> Seq.take 25
     |> Seq.rev
-    |> Seq.toArray
-
-let wordBarChart (words : TermStat []) (title: string) = 
-    words
-    |> Seq.map (fun xs -> 
-        match xs.Term, xs.Stat with 
-        | term, TfIdf tfIdf when tfIdf > 0.-> 
-            Some(term, tfIdf)
-        | _ -> None)
-    |> Seq.choose id
-    |> Seq.toArray
-    |> Chart.Column
-    |> Chart.withTitle title
-    |> Chart.withSize (1250., 500.)
+    |> Seq.toArray 
 
 /// wordBarChart lowTfIdfWords "Low Tf-Idf words (Common words)" |> Chart.Show
 /// wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
@@ -504,7 +512,7 @@ let tfIdfHistogram (terms: TermStat [])
     terms
     |> Seq.map (fun xs -> 
         match xs.Stat with
-        | TfIdf tfIdf -> Some tfIdf
+        | TermFreqInvDocFreq tfIdf -> Some tfIdf
         | _ -> None)
     |> Seq.choose id
     // For vizualization purposes
@@ -540,7 +548,7 @@ let tfIdfNGramsTokenizer (docTransformer: DocTransfromer)
         tdIdfofDoc.TryFind term
         |> Option.map (fun term -> 
             match term.Stat with
-            | TfIdf tfIdf when tfIdf > tfIdfThresh -> Some term.Term
+            | TermFreqInvDocFreq tfIdf when tfIdf > tfIdfThresh -> Some term.Term
             | _ -> None )
         |> Option.flatten
         
