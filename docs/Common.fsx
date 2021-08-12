@@ -1,5 +1,7 @@
+/// #load "C:\Users\Five star\Documents\GitHub\ConferenceCalls\Secrets.fsx"
+
 #r "nuget: FSharp.Data"
-#load "C:\Users\Five star\Documents\GitHub\ConferenceCalls\Secrets.fsx"
+#load "/Users/antonioelias/Documents/GitHub/ConferenceCalls/Secrets.fsx"
 
 open System
 open System.IO

@@ -1,19 +1,35 @@
 (**
+---
+title: Classifying earnings call transcripts with Naive Bayes
+category: Scripts
+categoryindex: 3
+index: 2
+---
+*)
+
+(**
 # Classifying earnings call transcripts with Naive Bayes
 *)
 
 (**
-After dowloading earnings transcripts from Motley Fool, we computed the *excess* cumulative return 
-of each respective company around its earnings call (see `ReturnsAroundEarnings.fsx`).
-We can use these cumulative returns as a way to label or filter "bad" earnings calls from "good" earnings calls. 
+After dowloading earnings transcripts from Motley Fool, we proceeded to computed 
+the *excess* cumulative returns of each respective company around its earnings call 
+in `ReturnsAroundEarnings.fsx`. We can now use the excess cumulative returns we have 
+computed as a *proxy* that is meant to measure the market's overall sentiment towards 
+a given earnings call.
 
-In other words, using machine learning lingo, we will use these cumualtive returns to artificially build a target variable, call it `Label`.
-Each transcript's `Label` will be modeled as a discriminated union with three cases: `Positive`, `Negative`, and `Neutral`. 
-This is a rational decision, as the *excess* cumulative returns are a good proxy for measuring the market's view on earnings calls.
-Likewise, the entire feature set will be constructed from the collected transcripts.
+More specifically, we'll place company transcripts into buckets according to some 
+pre-specified excess cumulative return threshold:
 
-Our goal will be to correctly *classify* each transcript's `Label` according to the content provided from each transcript.
+- The market sentiment of each transcript can be modeled as a discriminated union, 
+call it `MktSentiment`, with three cases: `Positive`, `Negative`, and `Neutral`. 
 
+- In machine learning lingo, by labelling each transcript according to some threshold,
+we'll be transforming our variable of interest from numeric to categorical. 
+In other words, we'll be transforming a regression problem into a classification problem.
+
+There are many machine learning algorithms to choose from when trying to solve a binary or multi-classification problem.
+Due to its simplicity and intuitive framework, a Naive Bayes[] classifier is often a good place to start.
 *)
 
 (**
@@ -49,9 +65,13 @@ let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
 
-let rawDataset = 
-    let rnd = System.Random()
+let fullRawSample = 
     readJson ("data-cache/ReturnsAroundEarningsFullSample.json")
+    |> Seq.toArray
+
+let randRawSample =
+    let rnd = System.Random()
+    fullRawSample
     |> Seq.sortBy (fun _ -> rnd.Next())
     |> Seq.take 5000
     |> Seq.toArray
@@ -64,22 +84,25 @@ let rawDataset =
 Some paragraphs are longer than others, and some paragraphs aren't even real paragraphs. 
 One-liners like opening and closing remarks add noise to our dataset and should be taken care of.
 We can filter for short paragraphs by counting the number of characters present in each paragraph. 
-On average, a paragraph contains 3-4 sentences and each sentence contains about 75-100 characters. 
+On average, a paragraph contains 3-4 sentences and each sentence contains about 75-100 characters.
+Since we want to eliminate short paragraphs, we will filter them out by their character count (<100).
 *)
 
 /// Filter paragraphs by character count
 let shortParagraphs = 
-    rawDataset
+    randRawSample
     |> Array.collect (fun xs -> 
         xs.Transcript.Paragraphs 
         |> Array.filter (fun paragraph -> paragraph.Length < 100))
 
 shortParagraphs
-|> Array.take 10
+|> Array.take 5
 |> Array.iter (printfn "%s")
 
+(*** include-it ***)
+
 (**
-## Labeled Transcript
+## Labelling transcripts: Market sentiment
 *)
 
 type Label = 
@@ -118,13 +141,13 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
           EarningsCall = earningsCall
           CumulativeReturn = xs.CumulativeReturn })
 
-let allTranscripts = labelDataset rawDataset
+let allTranscripts = labelDataset randRawSample
 
 (**
-## Cumulative returns distribution
+## Histogram: Excess cumulative returns
 *)
 
-/// Builds cumulative return histogram
+/// Build cumulative return histogram
 let returnsHist (transcripts: LabeledTranscript []) = 
     let makeChartFromLabel label = 
         let rets = 
@@ -150,7 +173,8 @@ let returnsHist (transcripts: LabeledTranscript []) =
     |> Chart.withTitle "Excess cumulative returns"
     |> Chart.withSize (1250., 750.)
 
-returnsHist allTranscripts |> Chart.Show
+returnsHist allTranscripts |> GenericChart.toChartHTML
+(*** include-it-raw ***)
 
 (**
 ## Naive Bayes Module
