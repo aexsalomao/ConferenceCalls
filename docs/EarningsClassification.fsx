@@ -69,13 +69,6 @@ let fullRawSample =
     readJson ("data-cache/ReturnsAroundEarningsFullSample.json")
     |> Seq.toArray
 
-let randRawSample =
-    let rnd = System.Random()
-    fullRawSample
-    |> Seq.sortBy (fun _ -> rnd.Next())
-    |> Seq.take 5000
-    |> Seq.toArray
-
 (**
 ## Removing noise from feature set
 *)
@@ -90,7 +83,7 @@ Since we want to eliminate short paragraphs, we will filter them out by their ch
 
 /// Filter paragraphs by character count
 let shortParagraphs = 
-    randRawSample
+    fullRawSample
     |> Array.collect (fun xs -> 
         xs.Transcript.Paragraphs 
         |> Array.filter (fun paragraph -> paragraph.Length < 100))
@@ -140,7 +133,22 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
           EarningsCall = earningsCall
           CumulativeReturn = xs.CumulativeReturn })
 
-let allTranscripts = labelDataset randRawSample
+let allTranscripts = labelDataset fullRawSample
+
+(**
+Export to Json 
+*)
+
+let LabeledTranscriptToJson (fileName: string) (transcripts: LabeledTranscript [])  = 
+    JsonConvert.SerializeObject(transcripts)
+    |> fun json -> IO.File.WriteAllText(fileName, json)
+
+let randTranscripts = 
+    let rnd = System.Random()
+    fullRawSample
+    |> Seq.sortBy (fun _ -> rnd.Next())
+    |> Seq.take 5000
+    |> Seq.toArray
 
 (**
 ## Histogram: Excess cumulative returns
@@ -173,7 +181,7 @@ let returnsHist (transcripts: LabeledTranscript []) =
     |> Chart.withSize (1250., 750.)
 
 returnsHist allTranscripts |> GenericChart.toChartHTML
-(*** include-it-raw ***)
+(***include-it-raw***)
 
 (**
 ## Naive Bayes Module
