@@ -212,6 +212,7 @@ let classify (labelGroups: ('Label * DocGroup)[])
 
 let proportion count total = float count / float total
 
+/// Laplace smoothing -> Handling the problem of "zero probability"
 let laplace count total = float (count+1) / float (total+1)
 
 let countIn (docs: TokenizedDoc seq) (token: Token) =
@@ -322,7 +323,22 @@ let evaluate (tokenizer: Tokenizer) (tokens: Token Set) =
 *)
 
 (**
-The most common tokenization process is whitespace/unigram tokenization
+The most common tokenization process is whitespace/unigram tokenization. In this process, 
+the entire text is split into words by splitting them from whitespaces.
+
+N-Grams -> Tokenization of adjacent words 
+
+For example:
+- Text: "The quick brown fox jumps"
+- 2-Grams tokens: {"The quick", "quick brown", "brown fox", "fox jumps"}
+
+- N-Grams advantage is that they are easy to generate, and they require no 
+linguistic knowledge or complex parsing algorithm.
+
+- The main disadvantage of n-grams is that they greatly increase the size of 
+the feature set (see [curse of dimensionality](https://towardsdatascience.com/the-curse-of-dimensionality-50dc6e49aa1e)).
+The number of features generated can quickly get out of hand, and many of them
+will be very rare, occuring only once in the corpus.
 *)
 
 let nGrams (n: int) (text: string): string [] = 
@@ -352,14 +368,27 @@ let twoGramsTokenizer (text: string): Set<string> =
     |> nGrams 2
     |> Set
 
-/// Some tests
+/// Test
 let woodpecker = "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
 twoGramsTokenizer woodpecker
 
+(***include-it***)
+
 (**
 ## Term Frequency (TF)
-$tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
-$n_{t,d}$ : number of times a term *t* is present in a document *d*.$
+*)
+
+(**
+Term *frequency* measures how prevalent a term is in a single document.
+
+- $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
+
+- $n_{t,d}$: number of times a term *t* is present in a document *d*.
+
+It is document specific and does not take into account other documents of the corpus.
+But how common it is in the entire corpus we're mining?
+
+- A term should not neither be too *rare* or too *common*!
 *)
 
 type DocTransfromer = string -> string []
@@ -386,7 +415,10 @@ let tf (docTransformer: DocTransfromer) (doc: string): TermStat [] =
 
 (**
 ## Inverse document frequency (IDF)
-$IDF (t) = 1 + log(\frac{Total number of documents}{Number of documents containing *t*})$
+*Inverse* document frequency measures the sparseness of a given term *t*. 
+It is **not** document specific, and takes into account information present from the entire corpus.
+
+- $IDF (t) = log(\frac{\text{Total number of documents}}{\text{Number of documents containing *t*}})$
 *)
 
 let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermStat> = 
@@ -408,8 +440,10 @@ let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermSta
 (**
 ## Term frequency - Inverse Document Frequency
 $TF-IDF(t, d) = TF(t, d) * IDF(t)$
-A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
-the weights hence tend to filter out common terms.
+
+- A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
+the weights hence tend to filter out common terms. TF-IDF value is specific to a single document (d)
+whereas IDF depends on the entire corpus.
 *)
 
 let tfIdf (docTransformer : DocTransfromer)
@@ -466,23 +500,30 @@ let wordBarChart (words : TermStat []) (title: string) =
     |> Chart.withTitle title
     |> Chart.withSize (1250., 500.)
 
-let lowTfIdfWords = 
+let lowTfIdfChart = 
     tfIdfDoc1
     |> Seq.sortBy (fun xs -> xs.Stat)
     |> Seq.distinctBy (fun xs -> xs.Stat)
     |> Seq.take 25
     |> Seq.toArray
+    |> fun xs -> wordBarChart xs "Low Tf-Idf words (Common words)"
+(***do-not-eval***)
+lowTfIdfChart |> Chart.Show
 
-let highTfIdfWords = 
+(***hide***)
+lowTfIdfChart |> GenericChart.toChartHTML
+(***include-it-raw***)
+
+let highTfIdfChart = 
     tfIdfDoc1
     |> Seq.sortByDescending (fun xs -> xs.Stat)
     |> Seq.distinctBy (fun xs -> xs.Stat)
     |> Seq.take 25
     |> Seq.rev
-    |> Seq.toArray 
+    |> Seq.toArray
+    |> fun xs -> wordBarChart xs "High Tf-Idf words (Relevant words)"
+(***do-not-eval***)
 
-/// wordBarChart lowTfIdfWords "Low Tf-Idf words (Common words)" |> Chart.Show
-/// wordBarChart highTfIdfWords "High Tf-Idf words (Relevant words)" |> Chart.Show
 
 (**
 # Tf-idf histogram
