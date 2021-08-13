@@ -228,7 +228,7 @@ let scoredWords =
 (**
 #### 1B) Sentiment-Charged set of words ($\hat{S}$)
 
-$$\hat{S} = { \{j: f_{j} \geq \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \hat{\pi} - \alpha_{-} \} \cap \{ j: k_{j} \geq \kappa\} $$
+$$\hat{S} = \{j: f_{j} \geq \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \hat{\pi} - \alpha_{-} \} \cap \{ j: k_{j} \geq \kappa\}$$
 
 - $f_{j} = \text{Sentiment-screening score of word } j $
 - $\hat{\pi} = \text{Fraction of articles tagged with a positive return}$
