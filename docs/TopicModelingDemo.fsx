@@ -162,12 +162,9 @@ by positive returns, that word is likely to convey positive sentiment.
 Methodology:
 
 1. Calculate the frequency with which each word (or phrase) *j* co-occurs with a positive
-return.
+return. (screening-score $f_{j}$)
 
-- Screening score: $f_{j} = \frac{\text{count of word j in articles with sgn(y) = +1}}{k_{j}}$
-- $k_{j}$: count of word *j* in all articles
-
-2. Compare $f_{j}$ with proper thresholds and create the sentiment-charged set of words.
+2. Compare $f_{j}$ with proper thresholds and create the sentiment-charged set of words $S$.
 *)
 
 (**
@@ -176,6 +173,7 @@ return.
 $$f_{j} = \frac{{\text{count of word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of word } j \text{ in all articles}} $$
 
 - Form of *marginal screening statistics*
+
 *)
 
 type ScreeningScore = 
@@ -230,11 +228,10 @@ let scoredWords =
 (**
 #### 1B) Sentiment-Charged set of words ($\hat{S}$)
 
-$$\hat{S} = {\{j: f_{j} \ge \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \le \hat{\pi} - \alpha_{-} \} \cap \{j: k_{j} 
-\ge \kappa \}$$
+$$\hat{S} = { \lbrace j: f_{j} \ge \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \le \hat{\pi} - \alpha_{-} \rbrace \cap \lbrace j: k_{j} \ge \kappa \rbrace $$
 
 - $f_{j} = \text{Sentiment-screening score of word } j $
-- $\hat{\pi} = \text{Fraction of articles tagged with a positive return}}$
+- $\hat{\pi} = \text{Fraction of articles tagged with a positive return}$
 - $\alpha_{+} = \text{Upper sentiment-score threshold}$
 - $\alpha_{-} = \text{Lower sentiment-score threshold}$
 - $k_{j} = \text{count of word } j \text{ in all articles}$
