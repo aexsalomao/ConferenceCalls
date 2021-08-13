@@ -1,4 +1,13 @@
 (**
+---
+title: Predicting Returns with text data
+category: Scripts
+categoryindex: 4
+index: 2
+---
+*)
+
+(**
 ## Import packages and load scripts
 *)
 
