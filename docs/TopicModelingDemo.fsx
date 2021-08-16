@@ -216,9 +216,8 @@ let scoreWord word =
 
     let countWordInGroup word group = 
         wordCountByLabel.TryFind group
-        |> Option.map (fun freqMap -> freqMap.TryFind word)
-        |> Option.flatten
-
+        |> Option.bind (fun wordFreqMap -> wordFreqMap.TryFind word)
+        
     let positiveCount, negativeCount = 
         countWordInGroup word Positive, countWordInGroup word Negative
 
