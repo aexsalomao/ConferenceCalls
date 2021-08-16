@@ -2,8 +2,8 @@
 ---
 title: Predicting Returns with text data
 category: Scripts
-categoryindex: 4
-index: 2
+categoryindex: 2
+index: 4
 ---
 *)
 
@@ -51,12 +51,17 @@ let readJson (jsonFile: string) =
 let fullSample = 
     readJson ("data-cache/LabeledTranscriptsFullSample.json")
 
-let randSample =
+let positiveOrNegativeRand =
     let rnd = System.Random()
     fullSample
+    |> Seq.filter (fun xs -> xs.Label <> Neutral)
     |> Seq.sortBy (fun _ -> rnd.Next())
     |> Seq.take 500
     |> Seq.toArray
+
+let train, test = 
+    let cutoff = int (float positiveOrNegativeRand.Length * 0.8) 
+    positiveOrNegativeRand.[.. cutoff], positiveOrNegativeRand.[cutoff + 1 ..]
 
 (**
 ### N-Grams (DocTransformer = string -> string [])
@@ -66,15 +71,20 @@ let nGrams (n: int) (text: string) =
   
     let generateNGram words = 
         let onlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
-        words    
-        |> Seq.collect(fun word -> 
+        
+        let isWord word = 
             word
             |> onlyWords.Matches
             |> Seq.cast<Match>
-            |> Seq.map (fun m -> m.Value))
-        |> fun nGram ->
-            if (nGram |> Seq.length = n) then Some (words |> String.concat(" "))
-            else None
+            |> Seq.map (fun m -> m.Value)
+        
+        let isNGram nGram =
+             if (nGram |> Seq.length = n) then Some (words |> String.concat(" "))
+             else None
+
+        words
+        |> Seq.collect isWord
+        |> isNGram
 
     text.Split(" ")
     |> Seq.windowed n
@@ -149,8 +159,13 @@ sensitivity of text generation to sentiment, etc.).
 - The error of predicting the sentiment score of a newly arriving article is both derived and quantified.
 *)
 
+
 (**
-## 1) Screening for Sentiment-Charged words
+### A Probabilistic Model for Sentiment Analysis
+*)
+
+(**
+### 1) Screening for Sentiment-Charged words
 *)
 
 (**
@@ -168,7 +183,7 @@ return. (screening-score $f_{j}$)
 *)
 
 (**
-### 1A) Screening Score ($f_{j}$)
+#### 1A) Screening Score
 
 $$f_{j} = \frac{{\text{count of word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of word } j \text{ in all articles}} $$
 
@@ -176,13 +191,14 @@ $$f_{j} = \frac{{\text{count of word } j \text{ in articles with } sgn(y) = +1 }
 
 *)
 
-type ScreeningScore = 
+type WordScreening = 
     { Word: string
       Score: float 
       Count : int }
 
-let wordFreqByLabel = 
-    randSample
+let wordCountByLabel = 
+    // Word count is done only on the training set
+    train
     |> Seq.map (fun xs -> xs.Label, xs.EarningsCall)
     |> Seq.groupBy fst
     |> Seq.map (fun (group, text) -> 
@@ -196,37 +212,44 @@ let wordFreqByLabel =
     |> Seq.toArray
     |> Map
 
-let countWordInGroup word group = 
-    wordFreqByLabel.TryFind group
-    |> Option.map (fun wordFreqMap -> wordFreqMap.TryFind word)
-    |> Option.flatten
+let scoreWord word = 
 
-let screeningScore word =
-    match countWordInGroup word Positive, 
-          countWordInGroup word Negative with
-    | Some p, 
-      Some n -> 
+    let countWordInGroup word group = 
+        wordCountByLabel.TryFind group
+        |> Option.map (fun freqMap -> freqMap.TryFind word)
+        |> Option.flatten
+
+    let positiveCount, negativeCount = 
+        countWordInGroup word Positive, countWordInGroup word Negative
+
+    match positiveCount, negativeCount with
+    | Some p, Some n -> 
         let score = ((float p / (float p + float n)))
         let count = p + n
         Some { Word = word
                Score = score
                Count = count}
-    | None, 
-      Some n -> 
-        Some { Word = word
-               Score = 0. 
-               Count = n}
-    | _ -> None
 
-let scoredWords = 
-    randSample
+    | Some p, None -> 
+        Some { Word = word
+               Score = 1.
+               Count = p}
+
+    | None, Some n -> 
+        Some { Word = word
+               Score = 0.
+               Count = n}
+    | _ ->  None
+
+let scoreWords (transcripts: LabeledTranscript [])= 
+    transcripts
     |> Seq.collect (fun xs -> xs.EarningsCall |> nGrams 1)
     |> Seq.distinct
-    |> Seq.choose screeningScore
+    |> Seq.choose scoreWord
     |> Seq.toArray
 
 (**
-#### 1B) Sentiment-Charged set of words ($\hat{S}$)
+#### 1B) Sentiment-charged set of words
 
 $$\hat{S} = \{j: f_{j} \geq \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \hat{\pi} - \alpha_{-} \} \cap \{ j: k_{j} \geq \kappa\}$$
 
@@ -239,19 +262,37 @@ $$\hat{S} = \{j: f_{j} \geq \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \hat{
 The thresholds ($\alpha{+}, \alpha{-}, \kappa$) are *hyper-parameters* that can be tuned via cross-validation.
 *)
 
-let sentimentSet upper lower minWords words = 
-    words
+/// Fraction of articles tagged with positive returns
+    
+/// Sentiment-charged set of words
+let getSentimentSet alphaUpper alphaLower kappa scoredWords = 
+    
+    // Fraction of articles tagged with positive returns
+    let pieHat = 
+        train 
+        |> Array.filter (fun xs -> xs.Label = Positive)
+        |> fun posObs -> float posObs.Length / float train.Length
+
+    // Screening for sentiment charged words
+    scoredWords
     |> Seq.filter (fun xs -> 
-        // Screening for sentiment charged words
-        (xs.Score > upper || xs.Score < lower) && (xs.Count > minWords))
+        let upperThresh, lowerThresh = (pieHat + alphaUpper), (pieHat - alphaLower)
+        (xs.Score >= upperThresh || xs.Score <= lowerThresh) && (xs.Count >= kappa))
     |> Seq.toArray
 
-scoredWords
-|> sentimentSet 0.6 0.4 100
+let sentimentSet = 
+    let scoredWords = scoreWords train 
+    let alphaUpper, alphaLower, kappa = 0.15, 0.15, 200
+    getSentimentSet alphaUpper alphaLower kappa scoredWords
 
 (**
 ## 2. Learning Sentiment Topics
 *)
+
+(**
+
+*)
+
 
 (**
 ## 3. Scoring New Articles
