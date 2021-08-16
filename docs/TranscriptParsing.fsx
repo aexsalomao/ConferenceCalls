@@ -237,13 +237,14 @@ teslaDoc
 
 So far we have worked with individual functions that take in one single argument, an html transcript document. Since they all work with the `TranscriptDocument` type, we can easily combine these functions together to form one single function that returns all the individual bits of data that we want.
 
-We'll use a transcript type from [Types.fsx](Types.html).
+We'll use a transcript type called `Transcript` to hold all the information we want.
 *)
 
-(*** hide ***)
-#load "types.fsx"
-open Types
-
+type Transcript = 
+    {Ticker : string
+     Exchange: string
+     Date : DateTime
+     Paragraphs : string []}
 
 /// Search for ticker, exchange, date and paragraphs
 let parseTrancriptDoc (doc: TranscriptDocument): option<Transcript> =
@@ -347,14 +348,7 @@ let asyncPages (pages: int list) =
     transcripts
 
 
-// let xs = asyncPages [1; 2; 3; 4; 5]
-
-let exampleTranscripts = 
-    [200 .. 205]
-    |> Seq.map asyncPage
-    |> Async.ParallelThrottled
-    |> Async.RunSynchronously
-    |> Array.collect id
+let exampleTranscripts = asyncPages [ 200 .. 201 ]
 
 /// Total number of transcripts
 printfn $"N: {exampleTranscripts.Length}"
@@ -368,6 +362,20 @@ exampleTranscripts
     printfn $" Datetime: {transcript.Date} --- Ticker, Exchange: {transcript.Ticker}, {transcript.Exchange}")
 
 (*** include-output ***)
+
+#r "nuget: Plotly.NET, 2.0.0-preview.6"
+open Plotly.NET
+
+let transcriptDatesHistogram = 
+    exampleTranscripts
+    |> Array.map(fun x -> x.Date)
+    |> Chart.Histogram
+
+(*** do-not-eval ***)
+transcriptDatesHistogram |> Chart.Show 
+(*** hide ***)
+transcriptDatesHistogram |> GenericChart.toChartHTML
+(*** include-it-raw ***)
 
 (**
 ## Export to json

@@ -38,6 +38,8 @@ Due to its simplicity and intuitive framework, a Naive Bayes[] classifier is oft
 
 #r "nuget: FSharp.Collections.ParallelSeq"
 #r "nuget: FSharp.Stats"
+#r "nuget: Newtonsoft.Json"
+#r "nuget: Plotly.NET, 2.0.0-preview.6"
 
 open System
 open System.Text.RegularExpressions
@@ -45,12 +47,6 @@ open FSharp.Collections.ParallelSeq
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
-
-//#load "TranscriptParsing.fsx"
-#load "ReturnsAroundEarnings.fsx" 
-
-open TranscriptParsing
-open ReturnsAroundEarnings
 
 open FSharp.Data
 open Newtonsoft.Json
@@ -60,6 +56,16 @@ open FSharp.Stats
 (**
 ## Read transcripts from json file
 *)
+
+type Transcript = 
+    { Ticker : string
+      Exchange: string
+      Date : DateTime
+      Paragraphs : string []}
+
+type AnnouncementDayReturn = 
+    { Transcript : Transcript
+      CumulativeReturn : float }
 
 let readJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)

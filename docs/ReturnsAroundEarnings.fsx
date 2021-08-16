@@ -38,13 +38,15 @@ For example:
 *)
 
 //#load "TranscriptParsing.fsx"
-#load "Types.fsx"
-      "Common.fsx"
-
+#r "nuget: FSharp.Data"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
-//open TranscriptParsing
-open Types
+#load "Common.fsx"
+
+if false then
+    let tiingoKey = System.Environment.GetEnvironmentVariable "TIINGO_API_KEY"
+    ()
+
 open Common
 
 open System
@@ -58,6 +60,11 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 ### Reading Transcript data from .json file:
 *)
 
+type Transcript = 
+    { Ticker : string
+      Exchange: string
+      Date : DateTime
+      Paragraphs : string []}
 
 /// JSON data reader
 let readJson (jsonFile: string) =
@@ -67,7 +74,7 @@ let readJson (jsonFile: string) =
 /// Transcripts data
 let myTranscripts = 
     readJson ("data-cache/TranscriptsDemo.json")
-    |> Seq.take 100
+    |> Seq.truncate 100
     |> Seq.toArray
 
 (**
@@ -83,7 +90,11 @@ let callsByTimeOfDay (transcripts : Transcript []) =
     |> Chart.withX_AxisStyle "Hour"
     |> Chart.withY_AxisStyle "Count"
 
-/// myTranscripts |> callsByTimeOfDay |> Chart.Show
+(*** do-not-eval ***)
+myTranscripts |> callsByTimeOfDay |> Chart.Show
+(*** hide ***)
+myTranscripts |> callsByTimeOfDay |> GenericChart.toChartHTML
+(*** include-it-raw ***)
 
 (**
 ## Tiingo returns
@@ -122,7 +133,7 @@ let startSample, endSample =
 
 /// SP500 (benchmark of choice)
 let spyObs = 
-    let getReturnsMap rets =
+    let getReturnsMap (rets: ReturnObs []) =
         rets
         |> Array.map (fun xs -> xs.Date, xs.Return)
         |> Map
