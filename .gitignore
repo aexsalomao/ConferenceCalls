@@ -7,3 +7,4 @@ Secrets.fsx
 data-cache/
 output/
 tmp/
+docs/data-cache
