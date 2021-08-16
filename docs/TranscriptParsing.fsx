@@ -236,13 +236,14 @@ teslaDoc
 ## Transcript Record
 
 So far we have worked with individual functions that take in one single argument, an html transcript document. Since they all work with the `TranscriptDocument` type, we can easily combine these functions together to form one single function that returns all the individual bits of data that we want.
+
+We'll use a transcript type from [Types.fsx](Types.html).
 *)
 
-type Transcript = 
-    {Ticker : string
-     Exchange: string
-     Date : DateTime
-     Paragraphs : string []}
+(*** hide ***)
+#load "types.fsx"
+open Types
+
 
 /// Search for ticker, exchange, date and paragraphs
 let parseTrancriptDoc (doc: TranscriptDocument): option<Transcript> =
@@ -346,7 +347,7 @@ let asyncPages (pages: int list) =
     transcripts
 
 
-// let xs = asyncPages [1; 2; 3; 4; 5] |> Async.RunSynchronously
+// let xs = asyncPages [1; 2; 3; 4; 5]
 
 let exampleTranscripts = 
     [200 .. 205]
