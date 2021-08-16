@@ -212,7 +212,7 @@ let wordCountByLabel =
     |> Seq.toArray
     |> Map
 
-let scoreWord word = 
+let scoreWord word =
 
     let countWordInGroup word group = 
         wordCountByLabel.TryFind group

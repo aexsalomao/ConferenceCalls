@@ -46,7 +46,7 @@ open FSharp.Collections.ParallelSeq
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
-#load "TranscriptParsing.fsx"
+//#load "TranscriptParsing.fsx"
 #load "ReturnsAroundEarnings.fsx" 
 
 open TranscriptParsing
@@ -470,8 +470,7 @@ let tfIdf (docTransformer : DocTransfromer)
             | _ -> None
 
        inverseDocFreq.TryFind termTf.Term
-       |> Option.map computeTfIdf
-       |> Option.flatten
+       |> Option.bind computeTfIdf
             
    doc
    |> tf docTransformer
@@ -595,11 +594,10 @@ let tfIdfNGramsTokenizer (docTransformer: DocTransfromer)
     
     let relevantTerm term = 
         tdIdfofDoc.TryFind term
-        |> Option.map (fun term -> 
+        |> Option.bind (fun term -> 
             match term.Stat with
             | TermFreqInvDocFreq tfIdf when tfIdf > tfIdfThresh -> Some term.Term
             | _ -> None )
-        |> Option.flatten
         
     doc
     |> docTransformer

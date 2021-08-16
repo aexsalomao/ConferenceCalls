@@ -37,12 +37,14 @@ For example:
 ## Import packages and load scripts
 *)
 
-#load "TranscriptParsing.fsx"
-#load "Common.fsx"
+//#load "TranscriptParsing.fsx"
+#load "Types.fsx"
+      "Common.fsx"
 
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
-open TranscriptParsing
+//open TranscriptParsing
+open Types
 open Common
 
 open System
@@ -55,6 +57,7 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 (**
 ### Reading Transcript data from .json file:
 *)
+
 
 /// JSON data reader
 let readJson (jsonFile: string) =
@@ -254,8 +257,8 @@ let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn opti
     transcript
     |> twoWeekReturnWindow
     |> findRetWindows
-    |> Option.map getAdjustedReturns
-    |> Option.flatten
+    |> Option.bind getAdjustedReturns
+
 
 (**
 #### Compute cumualtive returns
