@@ -254,8 +254,8 @@ let threeDayAdjustedReturns (transcript: Transcript): AnnouncementDayReturn opti
     transcript
     |> twoWeekReturnWindow
     |> findRetWindows
-    |> Option.map getAdjustedReturns
-    |> Option.flatten
+    |> Option.bind getAdjustedReturns
+
 
 (**
 #### Compute cumualtive returns

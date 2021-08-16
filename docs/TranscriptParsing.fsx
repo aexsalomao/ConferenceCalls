@@ -305,17 +305,53 @@ let asyncPage (n: int) =
                     return! loop (attempt - 1) n
                 else return! failwithf "Failed to request '%s'. Error: %O" frontPageP e }
     loop 5 n 
+   
+let asyncPage2 (n: int) =
+    let rec loop attempt n =
+        async {
+            printfn $"{n}"
+            let frontPageP = $"https://www.fool.com/earnings-call-transcripts/?page={n}"
+            try 
+                let! pageDoc = HtmlDocument.AsyncLoad frontPageP 
+                return findTranscriptUrls pageDoc
+            with e ->
+                if attempt > 0 then
+                    do! Async.Sleep 2000 // Wait 2 seconds in case we're throttled.
+                    return! loop (attempt - 1) n
+                else return! failwithf "Failed to request '%s'. Error: %O" frontPageP e }
+    loop 5 n 
+    
+
 
 (**
 ### Parse Transcript Pages
 *)
 
-let asynchThrottled x = Async.Parallel(x, 5)
+module Async =
+    let ParallelThrottled xs = Async.Parallel(xs, 5)
+
+let asyncPages (pages: int list) = 
+    let urls = 
+        pages 
+        |> Seq.map asyncPage2 
+        |> Async.ParallelThrottled 
+        |> Async.RunSynchronously
+        |> Array.collect id
+    let transcripts =
+        urls
+        |> Array.map asyncTranscript
+        |> Async.ParallelThrottled
+        |> Async.RunSynchronously
+        |> Array.choose id
+    transcripts
+
+
+// let xs = asyncPages [1; 2; 3; 4; 5] |> Async.RunSynchronously
 
 let exampleTranscripts = 
     [200 .. 205]
     |> Seq.map asyncPage
-    |> asynchThrottled
+    |> Async.ParallelThrottled
     |> Async.RunSynchronously
     |> Array.collect id
 

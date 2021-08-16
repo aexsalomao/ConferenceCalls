@@ -198,8 +198,7 @@ let wordFreqByLabel =
 
 let countWordInGroup word group = 
     wordFreqByLabel.TryFind group
-    |> Option.map (fun wordFreqMap -> wordFreqMap.TryFind word)
-    |> Option.flatten
+    |> Option.bind (fun wordFreqMap -> wordFreqMap.TryFind word)
 
 let screeningScore word =
     match countWordInGroup word Positive, 
