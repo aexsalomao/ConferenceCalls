@@ -196,6 +196,22 @@ type WordScreening =
       Score: float 
       Count : int }
 
+
+/// Multiplicity 
+
+
+let someArr = [1;1;1;1;2;2;2;4]
+let toMatch = [|1;2;3;4|]
+
+let rec wordCount (x, ys) = 
+    // x: Word from article i
+    // ys: Vocab.list
+    match ys with
+    | [] -> 0
+    | y::tail when x=y -> 1 + wordCount (x, tail)
+    | _::tail ->  wordCount(x, tail)
+
+
 let wordCountByLabel = 
     // Word count is done only on the training set
     train
