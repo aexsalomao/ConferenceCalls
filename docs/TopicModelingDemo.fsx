@@ -426,7 +426,6 @@ let bigH =
         |> Array.map (fun (item, itemCount) -> item, (itemCount/sumOfChargedWords))
         |> fun xs -> call, xs)
 
-
 (**
 #### Estimating $$W$$
 *)
