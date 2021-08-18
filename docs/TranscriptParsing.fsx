@@ -51,11 +51,7 @@ using the `HtmlDocument.Load` method, also from FSharp Data.
 
 type FrontPageDocument = HtmlDocument
 
-/// Match html node with "href" attribute
-let tryHref (node: HtmlNode): string option =
-    let foolLink (attrib:HtmlAttribute) = $"https://www.fool.com{attrib.Value()}"
-    node.TryGetAttribute("href") |> Option.map foolLink
-
+/// Match html node with "href" attribute and create transcript url
 let makeFoolUrl (attrib:HtmlAttribute) = 
     match attrib.Name(), attrib.Value() with
     | "href", stub -> $"https://www.fool.com{stub}"
@@ -75,8 +71,7 @@ Lets take a look at the first three call transcript urls `CssSelect` was able to
 let exampleFrontPageDoc: FrontPageDocument = HtmlDocument.Load "https://www.fool.com/earnings-call-transcripts/?page=1"
 
 /// First three urls
-exampleFrontPageDoc
-|> findTranscriptUrls
+findTranscriptUrls exampleFrontPageDoc
 |> Array.take 3
 |> Array.iter (printfn "%s")
 
@@ -137,7 +132,10 @@ findTickerExchange teslaDoc
 *)
 
 (**
-We can use the `CssSelect` method to search for the exact date and time of the earnings call.
+Taking a closer look at Tesla's earnings transcript page, we can see that right 
+below Tesla's ticker we spot the exact time and date of the earnings call.
+
+Let's see if we can use `CssSelect` to fetch this information:
 *)
 
 (**
@@ -157,14 +155,11 @@ let cleanDate (node: HtmlNode): option<string> =
         |[|month; day; year|] -> Some ($"{month.[..2]} {day} {year}") 
         | _ -> None
 
-/// Match html node with some date
-let tryDate (node: HtmlNode option): option<string> = node |> Option.bind cleanDate
-
 /// Search for transcript date
 let findDate (doc: TranscriptDocument): option<string>=
     doc.CssSelect("span[id='date']")
     |> Seq.tryExactlyOne
-    |> tryDate
+    |> Option.bind cleanDate
 
 /// Date of Tesla's call:
 findDate teslaDoc
@@ -176,23 +171,20 @@ findDate teslaDoc
 *)
 
 /// Format time string
-let cleanTime (node: HtmlNode ) = 
-    let txt = node.InnerText().ToUpperInvariant().Replace(".", "")
-    if (txt.Contains "ET")
-    then txt.Replace("ET", "").Trim()
-    else failwithf $"Expected ET timezone but got {txt}"
-
-/// Match html node with some time
-let tryTime (node: HtmlNode option): option<string> =
-    match node with
-    | None -> None
-    | Some timeNode -> Some (cleanTime timeNode)
-
+let cleanTime (node: HtmlNode) =
+    node.InnerText()
+        .ToUpperInvariant()
+        .Replace(".", "")
+    |> fun txt ->    
+        if (txt.Contains "ET")
+        then txt.Replace("ET", "").Trim()
+        else failwithf $"Expected ET timezone but got {txt}" 
+   
 /// Search for transcript time
 let findTime (doc: TranscriptDocument) =
     doc.CssSelect("em[id='time']")
     |> Seq.tryExactlyOne
-    |> tryTime
+    |> Option.map cleanTime
 
 /// Time of Tesla's call
 findTime teslaDoc
@@ -220,7 +212,7 @@ let findDateTime (doc: TranscriptDocument): option<DateTime> =
     match findDate doc, findTime doc with
     | Some date, Some time -> 
         let dt = convertToDateTime (date, time)
-        Some (dt) 
+        Some dt
     | _ -> None
 
 /// Tesla call DateTime
@@ -240,6 +232,7 @@ In html, blocks of text or paragraphs are defined with the <p> tag:
 let findParagraphs (doc: HtmlDocument): string [] = 
     doc.CssSelect("p")
     |> Seq.map (fun x -> x.InnerText().Trim())
+    // Remove empty paragraphs
     |> Seq.filter (fun x -> x <> "")
     // Skip first 5 paragraphs
     |> Seq.skip 5
@@ -258,8 +251,8 @@ teslaDoc
 *)
 
 (**
-So far we have worked with individual functions that take in one single argument
-, an html transcript document. Since they all work with the `TranscriptDocument` 
+So far we have worked with individual functions that take in one single argument, 
+an html transcript document. Since they all work with the `TranscriptDocument` 
 type, we can easily combine these functions together to form one single function 
 that returns all the individual bits of data that we want.
 
@@ -267,7 +260,7 @@ We'll use a record called `Transcript` to hold all the information we want.
 *)
 
 type TranscriptId = 
-    | Indexed of ticker:string * exchange:string * date: DateTime
+    | Indexed of ticker:string * exchange:string * date: System.DateTime
 
 type Transcript = 
     { TranscriptId : TranscriptId
@@ -320,18 +313,15 @@ exampleTranscripts
 
 (*** include-output ***)
 
-
 (**
 ## Data visualization with Plotly.NET
 *)
 
 (**
 .NET has several useful libraries, including one dedicated for generating charts.
-With Plotly.NET[https://plotly.net/] you can create all sorts of charts from 
+With [Plotly.NET](https://plotly.net/) you can create all sorts of charts from 
 simple histograms all the way to 3D surface plots. Just like with FSharp Data, 
-we download Plotly.Net with .NET's package manager, Nuget.
-
-Lets investigate the distribution of the time of day of the transcripts we just parsed: 
+we can download Plotly.Net with .NET's package manager, Nuget.
 *)
 
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
@@ -339,14 +329,6 @@ open Plotly.NET
 
 /// Histogram
 let transcriptTimesHistogram = 
-
-    let description =
-        let text = $"Although we are working with a small sample of {exampleTranscripts.Length} 
-                     observations, we can already notice that the time of the earnings calls are 
-                     varied and that calls occur before market hours, during market hours and 
-                     even after market hours."
-
-        ChartDescription.create "Comments" text
 
     let callTimes = 
         exampleTranscripts
@@ -356,11 +338,9 @@ let transcriptTimesHistogram =
         |> Array.sort
     
     callTimes
-    |> Array.sort
     |> Chart.Histogram
     |> Chart.withTitle "Earnings calls by time of day (ET)"
     |> Chart.withY_AxisStyle "Count"
-    |> Chart.WithDescription description
     |> Chart.withSize (750., 500.)
 
 (*** do-not-eval ***)
@@ -368,6 +348,12 @@ transcriptTimesHistogram |> Chart.Show
 (*** hide ***)
 transcriptTimesHistogram |> GenericChart.toChartHTML
 (*** include-it-raw ***)
+
+(**
+Although we are working with a small sample, we can already notice that 
+the time of the earnings calls are varied and that calls occur before 
+market hours, during market hours and even after market hours.
+*)
 
 (**
 ## Async methods

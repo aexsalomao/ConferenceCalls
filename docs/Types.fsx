@@ -1,6 +1,8 @@
+/// TranscriptParsing.fsx
+
+type TranscriptId = 
+    | Indexed of ticker:string * exchange:string * date: System.DateTime
 
 type Transcript = 
-    {Ticker : string
-     Exchange: string
-     Date : System.DateTime
-     Paragraphs : string []}
+    { TranscriptId : TranscriptId
+      Paragraphs: string [] }
