@@ -1,3 +1,1 @@
-# ConferenceCalls
-
- https://aexsalomao.github.io/ConferenceCalls/
+# Conference Calls
