@@ -355,36 +355,6 @@ The number of features generated can quickly get out of hand, and many of them
 will be very rare, occuring only once in the corpus.
 *)
 
-let nGrams (n: int) (text: string): string [] = 
-    let findWords words =
-
-        let isWord word = 
-            let candidateMatch = onlyWords.Match word
-            if candidateMatch.Success then Some candidateMatch 
-            else None
-
-        words
-        |> Seq.choose isWord
-        |> Seq.map (fun m -> m.Value)
-
-    let tryNGram words = 
-        if (words |> Seq.length = n) then Some (words |> String.concat(" "))
-        else None
-
-    text.Split(" ")
-    |> Seq.windowed n
-    |> Seq.map findWords
-    |> Seq.choose tryNGram
-    |> Seq.toArray
-
-let twoGramsTokenizer (text: string): Set<string> = 
-    text
-    |> nGrams 2
-    |> Set
-
-/// Test
-let woodpecker = "The cream-colored woodpecker (Celeus flavus) is unmistakably recognizable by its pale but distinct yellow plumage and beak, long erect crest, dark brown wings and black tail. The male is differentiated by the female by its thick bright red malar stripe. The yellow plumage may darken to a browner or darker tone if soiled. The cream-colored woodpecker is 24–26 centimetres (9.4–10.2 in) in height and weighs 95–130 grams (3.4–4.6 oz)."
-twoGramsTokenizer woodpecker
 
 (***include-it***)
 
@@ -405,28 +375,6 @@ But how common it is in the entire corpus we're mining?
 - A term should not neither be too *rare* or too *common*!
 *)
 
-type DocTransfromer = string -> string []
-
-type Stat = 
-    | TermFreq of float
-    | InvDocFreq of float
-    | TermFreqInvDocFreq of float
-
-type TermStat = 
-    { Term: string 
-      Stat: Stat } 
-
-let tf (docTransformer: DocTransfromer) (doc: string): TermStat [] =
-    let terms = docTransformer doc
-    let nTerms = float terms.Length
-
-    terms
-    |> Seq.countBy id
-    |> Seq.map (fun (term, count) ->
-        let tf = TermFreq ((float count) / (nTerms))
-        {Term = term; Stat = tf})
-    |> Seq.toArray
-
 (**
 ## Inverse document frequency (IDF)
 *Inverse* document frequency measures the sparseness of a given term *t*. 
@@ -435,21 +383,6 @@ It is **not** document specific, and takes into account information present from
 - $IDF (t) = log(\frac{\text{Total number of documents}}{\text{Number of documents containing *t*}})$
 *)
 
-let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, TermStat> = 
-    let n = docs.Length
-    
-    let numberOfDocsByTerm = 
-        docs
-        |> Seq.map docTransfromer
-        |> Seq.collect Seq.distinct
-        |> Seq.countBy id
-      
-    numberOfDocsByTerm
-    |> Seq.map (fun (term, docsWithTerm) -> 
-        let idf = InvDocFreq (log (float n / float docsWithTerm))
-        term, { Term = term
-                Stat = idf})
-    |> Map
 
 (**
 ## Term frequency - Inverse Document Frequency
@@ -458,29 +391,16 @@ $TF-IDF(t, d) = TF(t, d) * IDF(t)$
 - A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
 the weights hence tend to filter out common terms. TF-IDF value is specific to a single document (d)
 whereas IDF depends on the entire corpus.
+
+
+- Very rare words do convey meaning, but their added computational cost in expanding 
+the set of features that must be considered often exceeds their diagnostic value.
+An approach that excludes both common and rare words and has proven very useful in practice 
+is filtering by 'term frequency - inverse document frequency' (tf-idf).
+A high weight in tf-idf is reached by a high term frequency (in the given document) and 
+a low document frequency of the term in the whole collection of documents; 
+the weights hence tend to filter out common terms."
 *)
-
-let tfIdf (docTransformer : DocTransfromer)
-          (inverseDocFreq: Map<string, TermStat>)
-          (doc: string): TermStat [] =
-
-   let getTfIdf termTf = 
-
-       let computeTfIdf termIdf = 
-            match termTf.Stat, termIdf.Stat with
-            | TermFreq tf, InvDocFreq idf -> 
-                let term = termIdf.Term
-                let tfIdf = TermFreqInvDocFreq (tf * idf)
-                Some { Term = term 
-                       Stat =  tfIdf }
-            | _ -> None
-
-       inverseDocFreq.TryFind termTf.Term
-       |> Option.bind computeTfIdf
-            
-   doc
-   |> tf docTransformer
-   |> Array.choose getTfIdf
 
 (**
 ## Tf-Idf tests

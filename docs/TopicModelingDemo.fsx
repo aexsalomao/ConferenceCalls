@@ -59,60 +59,55 @@ let positiveOrNegativeRand =
     |> Seq.take 500
     |> Seq.toArray
 
-
 (**
-## Preprocessing
+## Text Preprocessing
 *)
 
 (**
-To-do:
+See `TextPreprocessing.fsx`
+*)
 
-1. Normalization:
+(**
+#### 1) Normalization
+*)
+
+(**
 - Change all words in each article to lower case letters
 - Expanding contractions such as "haven't" to "have not"
 - Deleting numbers, punctuation, special symbols, and non-English words
-
-2. Stemming and lemmatizing:
-
-3. Tokenization (nGrams)
-
-4. Remove common words (TfIdf)
-
-5. Translate each article into a vector of word counts ("bag of words")
-
 *)
 
 (**
-### N-Grams (DocTransformer = string -> string [])
+#### 2) Lemmatiazation/Stemming (Porters Algorithm)
 *)
 
-let nGrams (n: int) (text: string) = 
-  
-    let generateNGram words = 
-        let onlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
-        
-        let isWord word = 
-            word
-            |> onlyWords.Matches
-            |> Seq.cast<Match>
-            |> Seq.map (fun m -> m.Value)
-        
-        let isNGram nGram =
-             if (nGram |> Seq.length = n) then Some (words |> String.concat(" "))
-             else None
+(**
+- Analyze words as a single root, e.g, "dissapointment" to "dissapoint"
+*)
 
-        words
-        |> Seq.collect isWord
-        |> isNGram
+(**
+#### 3) Tokenization
+*)
 
-    text.Split(" ")
-    |> Seq.windowed n
-    |> Seq.choose generateNGram
-    |> Seq.toArray
+(**
+- Split each article into a list of words
+*)
+
+(**
+#### 4) "Bag of words"
+*)
+
+(**
+- Transform each block of text to a vector of word counts
+*)
 
 (**
 #### Train and test sets
 *)
+
+#load "TextPreprocessing.fsx"
+open TextPreprocessing.Normalization
+open TextPreprocessing.Tokenization
 
 type CallId = 
     | Indexed of ticker:string * exchange:string
@@ -121,10 +116,13 @@ type Sentiment =
     | Positive
     | Negative
 
-type Call = { 
-    CallId: CallId
-    TextItems : string [] 
-    Signal : float } with
+type WordCount = 
+    {Word: string; Count: int}
+
+type Call = 
+    { CallId: CallId
+      WordCount: WordCount []
+      Signal: float } with
     
     member this.Flag =
         if this.Signal > 0. then Positive
@@ -133,11 +131,17 @@ type Call = {
 let train, test = 
     let generateCall xs = 
         let callId = Indexed (ticker = fst xs.TickerExchange, exchange=snd xs.TickerExchange)
-        let textItems = xs.EarningsCall |> nGrams 1
         let signal = xs.CumulativeReturn
-            
+        let wordCount = 
+            xs.EarningsCall
+            |> getOnlyWords
+            |> expandContractions
+            |> nGrams 2
+            |> Array.countBy id
+            |> Array.map (fun (word, count) -> {Word=word; Count=count})
+
         { CallId = callId
-          TextItems = textItems
+          WordCount = wordCount
           Signal = signal}
 
     positiveOrNegativeRand
@@ -255,24 +259,14 @@ type TextItemScreening =
 /// Corpus vocabulary (using only training set)
 let vocabulary =
     train
-    |> Seq.collect (fun xs -> xs.TextItems)
+    |> Seq.collect (fun xs -> xs.WordCount)
     |> Seq.distinct
     |> Seq.toArray
 
-/// Maps of item counts per Call
-let itemCountsById =
-    train
-    |> Array.map (fun xs -> 
-        let itemsCountMap = 
-            xs.TextItems 
-            |> Array.countBy id
-            |> Map 
-        xs, itemsCountMap)
-
 /// Vector of item counts per Group (Flag)
 let itemsCountByGroup = 
-    itemCountsById
-    |> Array.groupBy (fun (call, _) -> call.Flag)
+    train
+    |> Array.groupBy (fun (call) -> call.Flag)
     |> Array.map (fun (group, callsOfGroup) -> 
         
         let sumItemCounts (textItem: string, itemCounts: (string * int) []) = 

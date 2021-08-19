@@ -70,10 +70,12 @@ Lets take a look at the first three call transcript urls `CssSelect` was able to
 
 let exampleFrontPageDoc: FrontPageDocument = HtmlDocument.Load "https://www.fool.com/earnings-call-transcripts/?page=1"
 
+let exampleUrls = findTranscriptUrls exampleFrontPageDoc
+
 /// First three urls
-findTranscriptUrls exampleFrontPageDoc
+exampleUrls
 |> Array.take 3
-|> Array.iter (printfn "%s")
+|> Array.iter (fun xs -> printfn$"{xs}")
 
 (*** include-fsi-output***)
 
@@ -116,13 +118,13 @@ teslaDoc.CssSelect("span[class='ticker']")
 // A function to do the same
 let cleanTickerExchangeText (doc:TranscriptDocument) =
     doc.CssSelect("span[class='ticker']")
-    |> List.map (fun x -> 
+    |> Seq.map (fun x -> 
         x.InnerText()
          .Trim()
          .Replace("(","")
          .Replace(")",""))
-    |> List.distinct
-    |> List.tryExactlyOne 
+    |> Seq.distinct
+    |> Seq.tryExactlyOne
 
 cleanTickerExchangeText teslaDoc
 (***include-fsi-output***)
@@ -145,7 +147,6 @@ let findTickerExchange (doc: TranscriptDocument): option<string * string> =
     doc
     |> cleanTickerExchangeText
     |> Option.bind tryTickerExchange
-
 
 
 // Tesla ticker and exchange
@@ -291,8 +292,10 @@ that returns all the individual bits of data that we want.
 We'll use a record called `Transcript` to hold all the information we want.
 *)
 
-type TranscriptId = 
-    | Indexed of ticker:string * exchange:string * date: System.DateTime
+type TranscriptId =
+    { Ticker: string 
+      Exchange: string
+      Date: System.DateTime }
 
 type Transcript = 
     { TranscriptId : TranscriptId
@@ -306,7 +309,7 @@ let parseTrancriptDoc (doc: TranscriptDocument)=
      
     match matchExpr with
     | Some (ticker, exchange), Some date -> 
-        let transcriptId = Indexed (ticker, exchange, date)
+        let transcriptId = {Ticker=ticker; Exchange=exchange; Date=date}
         Some { TranscriptId = transcriptId
                Paragraphs = findParagraphs doc }
     | _ -> None
@@ -347,9 +350,8 @@ printfn $"N: {exampleTranscripts.Length}"
 exampleTranscripts
 |> Array.take 5
 |> Array.iter (fun xs -> 
-    match xs.TranscriptId with 
-    | Indexed (ticker, exchange, date) -> 
-        printfn $"TranscriptId: %4s{ticker}, %6s{exchange}, {date}")
+    let tId = xs.TranscriptId
+    printfn $"TranscriptId: %4s{tId.Ticker}, %6s{tId.Exchange}, {tId.Date}")
 
 (*** include-output ***)
 
@@ -372,9 +374,7 @@ let transcriptTimesHistogram =
 
     let callTimes = 
         exampleTranscripts
-        |> Array.map (fun xs -> 
-            match xs.TranscriptId with
-            | Indexed (_, _, date) -> date.TimeOfDay.ToString())
+        |> Array.map (fun xs -> xs.TranscriptId.Date.TimeOfDay.ToString())
         |> Array.sort
     
     callTimes
