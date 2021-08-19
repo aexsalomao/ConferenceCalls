@@ -75,52 +75,78 @@ findTranscriptUrls exampleFrontPageDoc
 |> Array.take 3
 |> Array.iter (printfn "%s")
 
-(*** include-output***)
+(*** include-fsi-output***)
 
 (**
 ## Transcript - Ticker & Exchange
 *)
 
-(**
+(** 
 Apart from using the `CssSelect` method to search for transcript urls 
 we can also use it to extract other key information like a company's 
-ticker and exchange as well as the time and date of the earnings call. 
+ticker and exchange as well as the time and date of the earnings call.
+
+Lets see if we can fetch Tesla's ticker and exchange from its 
+[2021 Q2 earnings call](https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/): 
+
+<img src="FsdocsImages\tesla_motley_fool.png" width="70%">
+*) 
+
+type TranscriptDocument = HtmlDocument
+/// Tesla transcript html document
+let teslaDoc: TranscriptDocument = HtmlDocument.Load "https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/"
+
+teslaDoc.CssSelect("span[class='ticker']")
+(***include-fsi-output***)
+
+teslaDoc.CssSelect("span[class='ticker']")
+|> List.map (fun x -> x.InnerText())
+(***include-fsi-output***)
+
+teslaDoc.CssSelect("span[class='ticker']")
+|> List.map (fun x -> 
+    x.InnerText()
+     .Trim()
+     .Replace("(","")
+     .Replace(")",""))
+|> List.distinct
+|> List.tryExactlyOne     
+(***include-fsi-output***)
+
+// A function to do the same
+let cleanTickerExchangeText (doc:TranscriptDocument) =
+    doc.CssSelect("span[class='ticker']")
+    |> List.map (fun x -> 
+        x.InnerText()
+         .Trim()
+         .Replace("(","")
+         .Replace(")",""))
+    |> List.distinct
+    |> List.tryExactlyOne 
+
+cleanTickerExchangeText teslaDoc
+(***include-fsi-output***)
+
+(**
 Since we are not certain that we'll retrieve both a ticker and an exchange 
 from *every* single transcript we parse, we can use match expressions and 
 option types to make sure to return only those matches that contain both a 
 valid ticker and exchange. 
 *)
 
-type TranscriptDocument = HtmlDocument
-
 /// Match inner text from html node to a ticker and exchange
 let tryTickerExchange (tickerInfo: string): option<string * string> =
-    tickerInfo.Split(":")
-    |> fun xs -> 
-        match xs with
-        |[|exchange; ticker|] -> Some (ticker, exchange)
-        | _ -> None
+    match tickerInfo.Split(":") with
+    |[|exchange; ticker|] -> Some (ticker, exchange)
+    | _ -> None
 
 /// Search for ticker and exchange
 let findTickerExchange (doc: TranscriptDocument): option<string * string> = 
-    doc.CssSelect("span[class='ticker']")
-    |> Seq.map (fun x -> x.InnerText().Trim())
-    // Filtering unwanted strings
-    |> Seq.filter (fun x -> not (x.Contains("(")))
-    |> Seq.tryExactlyOne
+    doc
+    |> cleanTickerExchangeText
     |> Option.bind tryTickerExchange
 
-(**
-Lets see if we can fetch Tesla's ticker and exchange from its 
-<a href="https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/" target="_blank">latest earnings call</a>:
-*)
 
-(**
-<img src="FsdocsImages\tesla_motley_fool.png" width="70%">
-*) 
-
-/// Tesla transcript html document
-let teslaDoc: TranscriptDocument = HtmlDocument.Load "https://www.fool.com/earnings/call-transcripts/2021/07/27/tesla-tsla-q2-2021-earnings-call-transcript/"
 
 // Tesla ticker and exchange
 findTickerExchange teslaDoc
@@ -238,11 +264,17 @@ let findParagraphs (doc: HtmlDocument): string [] =
     |> Seq.skip 5
     |> Seq.toArray
 
+let firstCharacters (paragraph:string) = 
+    let upTo = min 50 (paragraph.Length-1)
+    let txt = paragraph.[..upTo]  
+    if upTo = 50 then txt + " ... " else txt
+
 // First two paragraphs
 teslaDoc 
 |> findParagraphs
-|> Array.take 2
-|> Array.iter (printfn "%s")
+|> Array.take 5
+|> Array.map firstCharacters
+|> Array.iteri (printfn "Paragraph %i: %s")
 
 (*** include-output***)
 
@@ -270,19 +302,26 @@ type Transcript =
 let parseTrancriptDoc (doc: TranscriptDocument)=
     let matchExpr =  
         findTickerExchange doc, 
-        findDateTime doc, 
-        findParagraphs doc    
+        findDateTime doc   
      
     match matchExpr with
-    | Some (ticker, exchange), Some date, paragraphs -> 
+    | Some (ticker, exchange), Some date -> 
         let transcriptId = Indexed (ticker, exchange, date)
         Some { TranscriptId = transcriptId
-               Paragraphs = paragraphs }
+               Paragraphs = findParagraphs doc }
     | _ -> None
 
 /// Tesla transcript record
 let teslaTranscript = parseTrancriptDoc teslaDoc
 
+teslaTranscript 
+|> Option.iter(fun x -> 
+    printfn $"Id:\n{x.TranscriptId}\n"
+    printfn $"First 5 paragraphs:"
+    x.Paragraphs
+    |> Array.truncate 5
+    |> Array.map firstCharacters 
+    |> Array.iter (printfn "%A"))
 (*** include-output ***)
 
 (**
@@ -293,7 +332,8 @@ returns a `Transcript` type, lets try to parse all of the transcript urls from
 
 /// Parsing transcripts from front page
 let exampleTranscripts = 
-    findTranscriptUrls exampleFrontPageDoc
+    exampleFrontPageDoc
+    |> findTranscriptUrls 
     |> Array.choose (fun tUrl -> 
         let doc = HtmlDocument.Load tUrl
         parseTrancriptDoc doc)
@@ -309,7 +349,7 @@ exampleTranscripts
 |> Array.iter (fun xs -> 
     match xs.TranscriptId with 
     | Indexed (ticker, exchange, date) -> 
-        printfn $"TranscriptId: ({ticker}, {exchange}, {date})")
+        printfn $"TranscriptId: %4s{ticker}, %6s{exchange}, {date}")
 
 (*** include-output ***)
 
@@ -410,6 +450,7 @@ let asyncPages (pages: int list) =
         |> Array.choose id
     transcripts
 
+(***do-not-eval***)
 let exampleTranscriptsAsync = asyncPages [ 200 .. 201 ]
 
 (**

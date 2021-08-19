@@ -288,6 +288,7 @@ myReturns
 ### Download and Export to Json
 *)
 
+(***do-not-eval***)
 let AnnouncementDayReturnToJson (fileName: string) (transcripts: AnnouncementDayReturn [])  = 
     JsonConvert.SerializeObject(transcripts)
     |> fun json -> IO.File.WriteAllText(fileName, json)
