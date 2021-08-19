@@ -267,7 +267,7 @@ let findParagraphs (doc: HtmlDocument): string [] =
 let firstCharacters (paragraph:string) = 
     let upTo = min 50 (paragraph.Length-1)
     let txt = paragraph.[..upTo]  
-    if upTo = 50 then txt + " ... " else txt
+    if txt.Length < paragraph.Length then txt + " ... " else txt
 
 // First two paragraphs
 teslaDoc 
