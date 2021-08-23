@@ -470,6 +470,7 @@ let bigW =
     |> Array.mapi (fun i _ -> 
         (float (i + 1)/float n))
     |> fun xs -> 
+    
         matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
 
 (**
