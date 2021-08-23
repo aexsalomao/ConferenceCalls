@@ -355,9 +355,6 @@ The number of features generated can quickly get out of hand, and many of them
 will be very rare, occuring only once in the corpus.
 *)
 
-
-(***include-it***)
-
 (**
 ## Term Frequency (TF)
 *)
@@ -383,15 +380,14 @@ It is **not** document specific, and takes into account information present from
 - $IDF (t) = log(\frac{\text{Total number of documents}}{\text{Number of documents containing *t*}})$
 *)
 
-
 (**
 ## Term frequency - Inverse Document Frequency
 $TF-IDF(t, d) = TF(t, d) * IDF(t)$
 
-- A high weight in tf–idf is reached by a high term frequency (in the given document) and a low document frequency of the term in the whole collection of documents; 
-the weights hence tend to filter out common terms. TF-IDF value is specific to a single document (d)
-whereas IDF depends on the entire corpus.
-
+- A high weight in tf–idf is reached by a high term frequency (in the given document) and a 
+low document frequency of the term in the whole collection of documents; the weights hence tend 
+to filter out common terms. TF-IDF value is specific to a single document (d) whereas IDF 
+depends on the entire corpus.
 
 - Very rare words do convey meaning, but their added computational cost in expanding 
 the set of features that must be considered often exceeds their diagnostic value.
@@ -457,7 +453,6 @@ let highTfIdfChart =
     |> fun xs -> wordBarChart xs "High Tf-Idf words (Relevant words)"
 (***do-not-eval***)
 
-
 (**
 # Tf-idf histogram
 *)
@@ -466,19 +461,6 @@ let highTfIdfChart =
 let allDocsTwoGramsTfIdf = 
     allDocs
     |> Array.collect (fun doc -> tfIdf twoGrams idfTwoGrams doc)
-
-let description =
-    let heading = "Comments"
-    let description = 
-        "Very rare words do convey meaning, but their added computational cost in expanding 
-         the set of features that must be considered often exceeds their diagnostic value.
-         An approach that excludes both common and rare words and has proven very useful in practice 
-         is filtering by 'term frequency - inverse document frequency' (tf-idf).
-         A high weight in tf-idf is reached by a high term frequency (in the given document) and 
-         a low document frequency of the term in the whole collection of documents; 
-         the weights hence tend to filter out common terms."
-
-    ChartDescription.create heading description
 
 let tfIdfHistogram (terms: TermStat [])
                    (description: ChartDescription)

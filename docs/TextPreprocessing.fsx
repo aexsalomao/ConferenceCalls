@@ -1,3 +1,5 @@
+namespace Preprocessing
+
 module Normalization = 
 
     open System.Text.RegularExpressions
@@ -13,7 +15,6 @@ module Normalization =
             .Replace("?", "")
             .Replace("!", "")
             .ToLowerInvariant()
-
         |> onlyWords.Matches
         |> Seq.cast<Match>
         |> Seq.map (fun m -> m.Value)
@@ -38,7 +39,7 @@ module Normalization =
         
         let expand (word: string): option<string>=
             if word.Contains("'") then 
-                match simpleContractions.TryFind word 
+                match simpleContractions.TryFind word with
                 | Some expandedWord -> Some expandedWord
                 | None -> Some word
             else Some word

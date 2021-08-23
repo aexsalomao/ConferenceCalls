@@ -13,9 +13,10 @@ index: 4
 
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 #r "nuget: FSharp.Collections.ParallelSeq"
-#r "nuget: FSharp.Stats"
 #r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json"
+#r "nuget: MathNet.Numerics, 4.15.0"
+#r "nuget: MathNet.Numerics.FSharp, 4.15.0"
 
 open System
 open System.Text.RegularExpressions
@@ -27,7 +28,8 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
-open FSharp.Stats
+open MathNet.Numerics
+open MathNet.Numerics.LinearAlgebra
 
 (**
 ## Read transcripts from json file
@@ -56,11 +58,11 @@ let positiveOrNegativeRand =
     fullSample
     |> Seq.filter (fun xs -> xs.Label <> Neutral)
     |> Seq.sortBy (fun _ -> rnd.Next())
-    |> Seq.take 500
+    |> Seq.take 1000
     |> Seq.toArray
 
 (**
-## Text Preprocessing
+## Text Preprocessing: Bag of words
 *)
 
 (**
@@ -73,8 +75,8 @@ See `TextPreprocessing.fsx`
 
 (**
 - Change all words in each article to lower case letters
-- Expanding contractions such as "haven't" to "have not"
-- Deleting numbers, punctuation, special symbols, and non-English words
+- Expand contractions such as "haven't" to "have not"
+- Delete numbers, punctuation, special symbols, and non-English words
 *)
 
 (**
@@ -90,7 +92,7 @@ See `TextPreprocessing.fsx`
 *)
 
 (**
-- Split each article into a list of words
+- Split each article into a list of words or phrases
 *)
 
 (**
@@ -106,11 +108,12 @@ See `TextPreprocessing.fsx`
 *)
 
 #load "TextPreprocessing.fsx"
-open TextPreprocessing.Normalization
-open TextPreprocessing.Tokenization
+open Preprocessing.Normalization
+open Preprocessing.Tokenization
 
 type CallId = 
-    | Indexed of ticker:string * exchange:string
+    { Ticker: string
+      Exchange: string } 
 
 type Sentiment =
     | Positive
@@ -129,29 +132,29 @@ type Call =
         else Negative
 
 let train, test = 
-    let generateCall xs = 
-        let callId = Indexed (ticker = fst xs.TickerExchange, exchange=snd xs.TickerExchange)
+    let generateCall (xs: LabeledTranscript) = 
+        let callId = {Ticker = fst xs.TickerExchange ; Exchange = snd xs.TickerExchange}
         let signal = xs.CumulativeReturn
         let wordCount = 
             xs.EarningsCall
+            // Normalization
             |> getOnlyWords
             |> expandContractions
-            |> nGrams 2
+            // Tokenization
+            |> nGrams 1
+            // Bag of words
             |> Array.countBy id
             |> Array.map (fun (word, count) -> {Word=word; Count=count})
 
         { CallId = callId
           WordCount = wordCount
-          Signal = signal}
+          Signal = signal }
 
     positiveOrNegativeRand
     |> Array.map generateCall
     |> fun calls -> 
         let cutoff = float calls.Length * 0.8
         calls.[.. int cutoff], calls.[int cutoff + 1 ..]
-
-train.Length
-test.Length
 
 (**
 ## Introduction to Topic modeling
@@ -257,27 +260,27 @@ type TextItemScreening =
       Count: float }
 
 /// Corpus vocabulary (using only training set)
-let vocabulary =
+let vocabulary = 
     train
-    |> Seq.collect (fun xs -> xs.WordCount)
-    |> Seq.distinct
-    |> Seq.toArray
+    |> Array.collect (fun xs -> xs.WordCount |> Array.map (fun xs -> xs.Word))
+    |> Array.distinct
 
-/// Vector of item counts per Group (Flag)
-let itemsCountByGroup = 
+/// Vector of item counts per Group (Flag) (Bag of words per group)
+let itemCountsByGroup = 
     train
-    |> Array.groupBy (fun (call) -> call.Flag)
-    |> Array.map (fun (group, callsOfGroup) -> 
+    |> Seq.groupBy (fun xs -> xs.Flag)
+    |> Seq.map (fun (group, callsOfGroup) -> 
         
-        let sumItemCounts (textItem: string, itemCounts: (string * int) []) = 
-            textItem,
-            itemCounts |> Array.sumBy snd
+        let wordCounts = 
+            callsOfGroup 
+            |> Seq.collect (fun xs -> xs.WordCount)
+            |> Seq.groupBy (fun xs -> xs.Word)
+            |> Seq.map (fun (wordId, wordCounts) -> 
+                wordId, wordCounts |> Seq.sumBy (fun xs -> xs.Count))
+            |> Seq.toArray
 
-        callsOfGroup
-        |> Array.collect (fun (_, itemCount) -> itemCount |> Map.toArray)
-        |> Array.groupBy fst
-        |> Array.map sumItemCounts
-        |> fun itemCounts -> group, itemCounts |> Map)
+        group, wordCounts |> Map)
+    |> Seq.toArray
     |> Map
 
 /// Item Scores Map (used to filter for Sentiment charged words)
@@ -285,7 +288,7 @@ let itemScores =
     let getItemScore item =
        
         let countOfItemInGroup item group = 
-            itemsCountByGroup.TryFind group
+            itemCountsByGroup.TryFind group
             |> Option.bind (fun itemsCountMap -> itemsCountMap.TryFind item)
             
         let positiveCount, negativeCount = 
@@ -295,11 +298,11 @@ let itemScores =
         | Some p, Some n -> 
             let score = (float p / (float p + float n))
             let count = p + n
-            Some {TextItem = item; Score = score; Count = float count }
+            Some {TextItem = item; Score = score; Count = float count}
         | Some p, None -> 
-            Some {TextItem = item; Score = 1.; Count = float p }
+            Some {TextItem = item; Score = 1.; Count = float p}
         | None, Some n -> 
-            Some {TextItem = item; Score = 0.; Count = float n }
+            Some {TextItem = item; Score = 0.; Count = float n}
         | _ ->  None
     
     vocabulary
@@ -310,10 +313,10 @@ let itemScores =
 (**
 #### 1B) Sentiment-charged set of words
 
-$$\hat{S} = \{j: f_{j} \geq \hat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \hat{\pi} - \alpha_{-} \} \cap \{ j: k_{j} \geq \kappa\}$$
+$$\widehat{S} = \{j: f_{j} \geq \widehat{\pi} + \alpha_{+}, \text{ or } f_{j} \leq \widehat{\pi} - \alpha_{-} \} \cap \{ j: k_{j} \geq \kappa\}$$
 
 - $f_{j} = \text{Sentiment-screening score of word } j $
-- $\hat{\pi} = \text{Fraction of articles tagged with a positive return}$
+- $\widehat{\pi} = \text{Fraction of articles tagged with a positive return}$
 - $\alpha_{+} = \text{Upper sentiment-score threshold}$
 - $\alpha_{-} = \text{Lower sentiment-score threshold}$
 - $k_{j} = \text{count of word } j \text{ in all articles}$
@@ -342,24 +345,39 @@ let getChargedItems alphaLower alphaUpper kappa =
     |> Seq.sortBy fst
     |> Seq.toArray
 
-let alphaLower, alphaUpper, kappa  = (0.10, 0.10, 100.)
+let alphaLower, alphaUpper, kappa  = (0.10, 0.10, 300.)
 let chargedItems = getChargedItems alphaLower alphaUpper kappa
+
+chargedItems.Length
 
 (**
 #### Filtering original item counts
+- Filter train and test
 *)
 
-/// Maps of charged item counts per Call
-let chargedItemCountsById = 
-    let findChargedItemCount (itemCounts: Map<string, int>) = 
-        chargedItems
-        |> Array.choose (fun (item, _) -> 
-            match itemCounts.TryFind item with
-            | Some itemCount -> Some (item, float itemCount)
-            | None -> Some (item, 0.))
+let filterCall (call: Call): Call = 
 
-    itemCountsById
-    |> Array.map (fun (callId, itemCounts) ->  callId, findChargedItemCount itemCounts)    
+    let callMap = 
+        call.WordCount 
+        |> Array.map (fun xs -> xs.Word, xs) 
+        |> Map
+
+    let filteredItemCounts = 
+        chargedItems
+        |> Array.map (fun (chargedWord, _) -> 
+            match callMap.TryFind chargedWord with
+            | Some wordCount -> wordCount
+            | None -> {Word = chargedWord; Count = 0})
+    
+    { CallId = call.CallId
+      WordCount = filteredItemCounts
+      Signal = call.Signal }
+
+let chargedTrain = 
+    train
+    |> Array.map filterCall
+
+chargedTrain.Length
 
 (**
 ## 2. Learning Sentiment Topics
@@ -392,47 +410,109 @@ $$O_{-} = \text{ negative sentiment topic}$$
 
 $$\mathbb{E}h_{i} = \mathbb{E}\frac{d_{[S], i}}{s_{i}} = p_{i}O_{+} + (1 -p_{i})O_{-}$$
 
-Estimate $$H$$ by plugging in $$\hat{S}$$ from screening step:
+Estimate $$H$$ by plugging in $$\widehat{S}$$ from screening step:
 
-$$\hat{h_{i}} = \frac{d_{[\hat{S}], i}}{\hat{s}_{i}}$$
+$$\widehat{h_{i}} = \frac{d_{[\widehat{S}], i}}{\widehat{s}_{i}}$$
 
-$$\hat{s}_{i} = \sum_{j \in \hat{S}}^{}{d_{j, i}$$
+$$\widehat{s}_{i} = \sum_{j \in \widehat{S}}^{}{d_{j, i}$$
 
 Estimate W using the standardized ranks of returns. For each each article $$i$$ in the training sample $$i = 1, ..., n$$:
 
-$$\hat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}{n}$$
+$$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}{n}$$
 
 *)
 
 (**
-#### Estimating $$H$$
+## Constructing estimators
+*)
+
+(**
+#### Estimating $H$
+*)
+
+(**
+$$\widehat{H} = [\widehat{h_{1}}, \widehat{h_{2}},..., \widehat{h_{3}}]$$
+
+$\widehat{h_{i}} = \frac{d_{[\widehat{S}], i}}{\widehat{s}_{i}}$
+
+$\widehat{s}_{i} = \sum_{j \in \widehat{S}}^{}{d_{j, i}$
 *)
 
 let bigH = 
-    chargedItemCountsById
-    |> Array.map ( fun (call, itemCounts) ->
-        
+    chargedTrain
+    |> Array.map (fun xs -> 
         let sumOfChargedWords = 
-            itemCounts
-            |> Array.sumBy snd
-       
-        itemCounts
-        |> Array.map (fun (item, itemCount) -> item, (itemCount/sumOfChargedWords))
-        |> fun xs -> call, xs)
+            xs.WordCount
+            |> Array.sumBy (fun xs -> xs.Count)
+    
+        xs.WordCount
+        |> Array.map (fun xs -> float xs.Count/ float sumOfChargedWords))
+        |> matrix
+    
+bigH.RowCount
+bigH.ColumnCount
 
 (**
-#### Estimating $$W$$
+#### Estimating $W$
+*)
+
+(**
+$$\widehat{W} = \begin{bmatrix} \widehat{p_{1}} & \widehat{p_{2}} & \cdots & \widehat{p_{n}} \\ 1 - \widehat{p_{1}} & 1 - \widehat{p_{2}} & \cdots & 1 -\widehat{p_{n}} \end{bmatrix}$$
+
+$$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}{n}$$
 *)
 
 let bigW = 
-    let n = float train.Length
-    chargedItemCountsById
-    |> Array.sortBy (fun (call, _) -> call.Signal)
-    |> Array.mapi (fun i xs -> 
-        let rank = 1. + float i
-        let sentimentScore = rank /n
-        xs, sentimentScore)
+    let n = train.Length
+
+    train
+    |> Array.sortBy (fun xs -> xs.Signal)
+    |> Array.mapi (fun i _ -> 
+        (float (i + 1)/float n))
+    |> fun xs -> 
+        matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
+
+(**
+#### Estimating $O$
+*)
+
+(**
+Topic vectors $\widehat{O_{-}}, \widehat{O_{+}}$ 
+
+$$\widehat{O} = [\widehat{h_{1}}, \widehat{h_{2}},\ldots, \widehat{h_{n}}] \widehat{W}^{'} (\widehat{W}\widehat{W}^{'})^{-1}$$
+
+or 
+
+$$\widehat{O} = [\widehat{h_{1}}, \widehat{h_{2}}, \ldots , \widehat{h_{n}}] A $$
+
+$A = \widehat{W}^{'} (\widehat{W}\widehat{W}^{'})^{-1}$
+*)
+
+let bigW' = bigW.Transpose()
+
+let bigA = bigW'.Multiply(bigW.Multiply(bigW').Inverse())
+
+let bigO = 
+    bigH.Transpose().Multiply(bigA) 
+    |> Matrix.toColArrays
+    |> Array.map (fun valArr -> 
+        valArr
+        |> Array.map (fun xs -> if xs < 0. then 0. else xs)
+        |> fun onlyPositiveVals -> 
+            let norm = Array.sum onlyPositiveVals
+            onlyPositiveVals 
+            |> Array.map (fun xs -> xs / norm))
+    |> matrix
+    |> fun xs -> xs.Transpose()
+
+bigO.RowCount
 
 (**
 ## 3. Scoring New Articles
+*)
+
+(**
+Estimating $p$ (sentiment score) for new articles using maximum likelihood estimation:
+
+
 *)
