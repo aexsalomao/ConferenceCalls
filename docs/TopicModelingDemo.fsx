@@ -15,7 +15,6 @@ index: 4
 #r "nuget: FSharp.Collections.ParallelSeq"
 #r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json"
-#r "nuget: MathNet.Numerics, 4.15.0"
 #r "nuget: MathNet.Numerics.FSharp, 4.15.0"
 
 open System
@@ -28,7 +27,6 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
-open MathNet.Numerics
 open MathNet.Numerics.LinearAlgebra
 
 (**
@@ -470,7 +468,7 @@ let bigW =
     |> Array.mapi (fun i _ -> 
         (float (i + 1)/float n))
     |> fun xs -> 
-    
+
         matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
 
 (**
@@ -505,7 +503,7 @@ let bigO =
             |> Array.map (fun xs -> xs / norm))
     |> matrix
     |> fun xs -> xs.Transpose()
-
+    
 bigO.RowCount
 
 (**
@@ -514,6 +512,52 @@ bigO.RowCount
 
 (**
 Estimating $p$ (sentiment score) for new articles using maximum likelihood estimation:
-
-
+$$\widehat{p} = \arg\max_{p\in[\,0, 1]\,} \left\{\hat{s}^{-1} \sum_{j \in \widehat{S}}{d_{j}\log \left(p \widehat{O}_{+, j} + (\,1-p)\,\widehat{O}_{-, j}\right) + \lambda \log \left(p\left(1 - p \right)\right) \right\}$$
 *)
+
+// Example article (very negative)
+let negativeArticle, positiveArticle = 
+    test
+    |> Array.sortBy (fun xs -> xs.Signal)
+    |> fun xs -> 
+        filterCall (xs |> Seq.head), filterCall (xs |> Seq.last)
+
+// Topic vectors
+let bigOArr = bigO |> Matrix.toRowArrays
+
+/// s hat
+
+// "Function"
+let objF (call: Call) (p: float) = 
+    let sHat = call.WordCount |> Array.sumBy (fun xs -> xs.Count) |> fun xs -> (1. / float xs)
+
+    call.WordCount
+    |> Array.mapi (fun i xs -> 
+        let pos = p * bigOArr.[i].[0]
+        let neg = (1. - p) * bigOArr.[i].[0]
+        let d = float xs.Count
+        d * Math.Log (pos + neg))
+    |> Array.sum
+    |> fun sumExpr -> 
+        (sHat * sumExpr) + (0.05 * Math.Log (p * (1. - p)))
+
+
+let negObj = objF negativeArticle
+let posObj = objF positiveArticle
+
+Array.maxBy negObj [|0. .. 0.01 .. 1.|]
+Array.maxBy posObj [|0. .. 0.01 .. 1.|]
+
+
+
+
+
+(**
+Optimization
+*)
+
+
+
+
+
+
