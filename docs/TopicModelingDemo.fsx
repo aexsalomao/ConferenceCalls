@@ -58,7 +58,6 @@ let positiveOrNegativeRand =
     fullSample
     |> Seq.sortBy (fun _ -> rnd.Next())
     |> Seq.toArray
-    |> Array.take 15000
 
 (**
 ## Text Preprocessing: Bag of words
@@ -305,8 +304,8 @@ let itemScores =
         | _ ->  None
     
     vocabulary
-    |> Seq.choose getItemScore
-    |> Seq.map (fun xs -> xs.TextItem, xs)
+    |> Array.Parallel.choose getItemScore
+    |> Array.map (fun xs -> xs.TextItem, xs)
     |> Map
 
 (**
@@ -319,7 +318,6 @@ itemScores
 |> Array.filter (fun xs -> xs > 0.25 && xs < 0.75)
 |> Chart.Histogram
 |> Chart.Show
-
 
 (**
 #### 1B) Sentiment-charged set of words
@@ -353,13 +351,33 @@ let getChargedItems alphaLower alphaUpper kappa =
     |> Map.toSeq
     |> Seq.filter (fun (_, itemInfo) -> isCharged itemInfo)
     |> Seq.toArray
-    |> Seq.sortBy fst
-    |> Seq.toArray
 
-let alphaLower, alphaUpper, kappa  = (0.2, 0.2, 200.)
+    /// Making sure number of words in each group is equal
+    |> fun allWords ->
+        let negativeWords = 
+            allWords 
+            |> Array.filter (fun (_, score) -> score.Score <= lowerThresh)
+            |> Array.sortBy (fun (_, score) -> score.Score)
+        
+        let positiveWords = 
+            allWords 
+            |> Array.filter (fun (_, score) -> score.Score <= upperThresh)
+            |> Array.sortByDescending (fun (_, score) -> score.Score)
+
+        if negativeWords.Length > positiveWords.Length 
+        then
+            negativeWords
+            |> Array.take (positiveWords.Length)
+            |> fun xs -> 
+               Array.concat [|xs; positiveWords|]
+        else 
+            positiveWords
+            |> Array.take (negativeWords.Length)
+            |> fun xs -> 
+                Array.concat [|xs; negativeWords|]
+
+let alphaLower, alphaUpper, kappa  = (0.05, 0.05, 1500.)
 let chargedItems = getChargedItems alphaLower alphaUpper kappa
-
-chargedItems.Length
 
 (**
 #### Filtering original item counts
@@ -375,7 +393,7 @@ let filterCall (call: Call): Call =
 
     let filteredItemCounts = 
         chargedItems
-        |> Array.map (fun (chargedWord, _) -> 
+        |> Array.Parallel.map (fun (chargedWord, _) -> 
             match callMap.TryFind chargedWord with
             | Some wordCount -> wordCount
             | None -> {Word = chargedWord; Count = 0})
@@ -431,7 +449,7 @@ Estimate $$H$$ by plugging in $$\widehat{S}$$ from screening step:
 
 $$\widehat{h_{i}} = \frac{d_{[\widehat{S}], i}}{\widehat{s}_{i}}$$
 
-$$\widehat{s}_{i} = \sum_{j \in \widehat{S}}^{}{d_{j, i}$$
+$$\widehat{s}_{i} = \sum_{j \in \widehat{S}}{d_{j, i}}$$
 
 Estimate W using the standardized ranks of returns. For each each article $$i$$ in the training sample $$i = 1, ..., n$$:
 
@@ -440,11 +458,11 @@ $$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}
 *)
 
 (**
-## Constructing estimators
+## Estimator $\widehat{O}$
 *)
 
 (**
-#### Estimating $H$
+#### $H$
 *)
 
 (**
@@ -452,12 +470,35 @@ $$\widehat{H} = [\widehat{h_{1}}, \widehat{h_{2}},..., \widehat{h_{3}}]$$
 
 $\widehat{h_{i}} = \frac{d_{[\widehat{S}], i}}{\widehat{s}_{i}}$
 
-$\widehat{s}_{i} = \sum_{j \in \widehat{S}}^{}{d_{j, i}$
+$\widehat{s}_{i} = \sum_{j \in \widehat{S}}{d_{j, i}}$
+
+*)
+
+(**
+#### $W$
+*)
+
+(**
+
+$$\widehat{W} = \begin{bmatrix} \widehat{p_{1}} & \widehat{p_{2}} & \cdots & \widehat{p_{n}} \\ 1 - \widehat{p_{1}} & 1 - \widehat{p_{2}} & \cdots & 1 -\widehat{p_{n}} \end{bmatrix}$$
+
+$$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}{n}$$
+
+*)
+
+(**
+#### $O$
+*)          
+
+(**
+
+$$\widehat{O} = [\widehat{h_{1}}, \widehat{h_{2}},\ldots, \widehat{h_{n}}] \widehat{W}^{'} (\widehat{W}\widehat{W}^{'})^{-1}$$
+
 *)
 
 let bigH = 
     chargedTrain
-    |> Array.Parallel.map (fun xs -> 
+    |> Array.map (fun xs -> 
         let sumOfChargedWords = 
             xs.WordCount
             |> Array.sumBy (fun xs -> xs.Count)
@@ -466,69 +507,26 @@ let bigH =
         |> Array.map (fun xs -> float xs.Count/ float sumOfChargedWords))
         |> matrix
         |> fun xs -> xs.Transpose()
-    
-bigH.RowCount
-bigH.ColumnCount
-
-(**
-#### Estimating $W$
-*)
-
-(**
-$$\widehat{W} = \begin{bmatrix} \widehat{p_{1}} & \widehat{p_{2}} & \cdots & \widehat{p_{n}} \\ 1 - \widehat{p_{1}} & 1 - \widehat{p_{2}} & \cdots & 1 -\widehat{p_{n}} \end{bmatrix}$$
-
-$$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}{n}$$
-*)
 
 let bigW = 
     let n = chargedTrain.Length
 
     chargedTrain
     |> Array.sortBy (fun xs -> xs.Signal)
-    |> Array.Parallel.mapi (fun i _ -> 
+    |> Array.mapi (fun i _ -> 
         (float (i + 1)/float n))
     |> fun xs -> 
         matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
 
-bigW.RowCount
-bigW.ColumnCount
-
-(**
-Histogram: Sentiment scores from training set
-*)
-
-bigW
-|> Matrix.toRowArrays
-|> fun xs -> 
-    xs.[0]
-    |> Chart.Histogram
-    |> Chart.Show
-
-(**
-#### Estimating $O$
-*)          
-
-(**
-Topic vectors $\widehat{O_{-}}, \widehat{O_{+}}$ 
-
-$$\widehat{O} = [\widehat{h_{1}}, \widehat{h_{2}},\ldots, \widehat{h_{n}}] \widehat{W}^{'} (\widehat{W}\widehat{W}^{'})^{-1}$$
-
-or 
-
-$$\widehat{O} = [\widehat{h_{1}}, \widehat{h_{2}}, \ldots , \widehat{h_{n}}] A $$
-
-$A = \widehat{W}^{'} (\widehat{W}\widehat{W}^{'})^{-1}$
-*)
-
-let bigW' = bigW.Transpose()
-
-let bigA = bigW'.Multiply(bigW.Multiply(bigW').Inverse())
-
 let bigO = 
-    bigH.Multiply(bigA) 
+    
+    let h, w, w' = bigH, bigW, bigW.Transpose()
+    let ww' = w.Multiply(w')
+
+    h.Multiply(w').Multiply(ww'.Inverse())
     |> Matrix.toColArrays
-    |> Array.Parallel.map (fun valArr -> 
-        valArr
+    |> Array.map (fun col -> 
+        col
         |> Array.map (fun xs -> if xs < 0. then 0. else xs)
         |> fun onlyPositiveVals -> 
             let norm = Array.sum onlyPositiveVals
@@ -536,8 +534,15 @@ let bigO =
             |> Array.map (fun xs -> xs / norm))
     |> matrix
     |> fun xs -> xs.Transpose()
-    
+
+bigH.RowCount
+bigH.ColumnCount
+
+bigW.RowCount
+bigW.ColumnCount
+
 bigO.RowCount
+bigO.ColumnCount
 
 (**
 ## 3. Scoring New Articles
@@ -548,85 +553,16 @@ Estimating $p$ (sentiment score) for new articles using maximum likelihood estim
 $$\widehat{p} = \arg\max_{p\in[\,0, 1]\,} \left\{\hat{s}^{-1} \sum_{j \in \widehat{S}}{d_{j}\log \left(p \widehat{O}_{+, j} + (\,1-p)\,\widehat{O}_{-, j}\right) + \lambda \log \left(p\left(1 - p \right)\right) \right\}$$
 *)
 
-// Example article (very negative)
-let negativeArticleTrain, positiveArticleTrain = 
-    chargedTrain
-    |> Array.sortBy (fun xs -> xs.Signal)
-    |> fun xs -> 
-        filterCall (xs |> Seq.head), filterCall (xs |> Seq.last)
-
-let negativeArticleTest, positiveArticleTest = 
-    test
-    |> Array.sortBy (fun xs -> xs.Signal)
-    |> fun xs -> 
-        filterCall (xs |> Seq.head), filterCall (xs |> Seq.last)
-
-negativeArticleTrain.Signal
-negativeArticleTest.Signal
-
-positiveArticleTrain.Signal
-positiveArticleTest.Signal
-
-// Topic vectors
-let bigOArr = bigO |> Matrix.toRowArrays
-
-// "Function"
-let objF (call: Call) (p: float) (lambda: float)= 
-    
-    let filteredCall = filterCall call
-    
-    let sHat = 
-        filteredCall
-        |> fun xs -> 
-            xs.WordCount 
-            |> Array.sumBy (fun xs -> xs.Count) 
-            |> fun xs -> (1. / float xs)
-
-    filteredCall.WordCount
-    |> Array.Parallel.mapi (fun i xs -> 
-        let pos = p * bigOArr.[i].[0]
-        let neg = (1. - p) * bigOArr.[i].[1]
-        let d = float xs.Count
-        d * Math.Log (pos + neg))
-    |> Array.sum
-    |> fun sumExpr -> 
-        let obj = (sHat * sumExpr) + (lambda * Math.Log (p * (1. - p)))
-        (p, obj)
-
-
-let negTrain = objF negativeArticleTrain
-let posTrain = objF positiveArticleTrain
-
-let negTest = objF negativeArticleTest
-let posTest = objF positiveArticleTest
-
-let stupidOptimizer (call: Call) = 
-    [|0.05 .. 0.05 .. 1.|]
-    |> Array.Parallel.collect (fun scoreP -> 
-        [|0.0001 .. 0.005 .. 0.5|]
-        |> Array.map (fun lambdaL -> (scoreP, lambdaL), (objF call scoreP lambdaL)))
-        |> Array.maxBy snd
-
-
-
-train
-|> Array.sortByDescending (fun xs -> xs.Signal)
-|> Array.take 10
-|> Array.Parallel.map stupidOptimizer
-|> Array.map fst
-|> Array.averageBy snd
-       
-       
-
-
-
-
 (**
 Optimization
 *)
 
-let objF2 (call: Call) (p: float) = 
-    
+let bigOArr = 
+    bigO 
+    |> Matrix.toRowArrays
+
+let objF (call: Call) (p: float) (lambda: float) = 
+
     let filteredCall = filterCall call
     
     let sHat = 
@@ -637,29 +573,66 @@ let objF2 (call: Call) (p: float) =
             |> fun xs -> (1. / float xs)
 
     filteredCall.WordCount
-    |> Array.Parallel.mapi (fun i xs -> 
+    |> Array.mapi (fun i xs -> 
         let pos = p * bigOArr.[i].[0]
         let neg = (1. - p) * bigOArr.[i].[1]
         let d = float xs.Count
-        d * Math.Log (pos + neg))
+        d * log (pos + neg))
     |> Array.sum
     |> fun sumExpr -> 
-        (sHat * sumExpr) + (0.0001 * Math.Log (p * (1. - p)))
+        (sHat * sumExpr) + (lambda * log (p * (1. - p)))
         
-let computeScore (call: Call)= 
-    [|0.01 .. 0.01 .. 1.|]
-    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF2 call scoreP))
+let computeScore (call: Call) = 
+    [|0. .. 0.01 .. 1.|]
+    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.0005))
     |> Array.maxBy snd
 
-test
-|> Array.sortByDescending (fun xs -> xs.Signal)
-|> Array.take 100
-|> Array.Parallel.map computeScore
-|> Array.map fst
-|> Array.averageBy fst
 
+let positiveArticleTest = 
+    test
+    |> Array.sortByDescending (fun xs -> xs.Signal)
+    |> Array.head
+    |> computeScore
 
+(**
+DiffSharp demo
+*)
 
-computeScore negativeArticleTrain
+#r "nuget: DiffSharp-lite, 1.0.0-preview-987646120"
 
+open DiffSharp
+open DiffSharp.Optim
+
+let computeScore' (call: Call) (x: Tensor) =
+
+    let filteredCall = filterCall call
+
+    let sHat = 
+        filteredCall
+        |> fun xs -> 
+            xs.WordCount 
+            |> Array.sumBy (fun xs -> xs.Count) 
+            |> fun xs -> (1. / float xs)
+
+    let scoreP = x.[0]
+
+    filteredCall.WordCount
+    |> Array.mapi (fun i xs -> 
+        let pos = scoreP * bigOArr.[i].[0]
+        let neg = (1. - scoreP) * bigOArr.[i].[1]
+        let d = float xs.Count
+        d * log (pos + neg))
+    |> Array.sum
+    |> fun sumExpr -> 
+        (sHat * sumExpr) + (0.001 * log (scoreP * (1. - scoreP)))
+        |> fun xs -> xs * -1.
+    
+
+let lr, momentum, iters, threshold = 1e-3, 0.5, 1000, 1e-3
+
+let scoreFun = computeScore' negativeArticleTrain
+
+let scorePGuess = dsharp.tensor([0.5])
+
+let scoreFx, params' = optim.sgd(scoreFun, scorePGuess, lr=dsharp.tensor(lr), momentum=dsharp.tensor(momentum), nesterov=true, iters=iters, threshold=threshold)
 
