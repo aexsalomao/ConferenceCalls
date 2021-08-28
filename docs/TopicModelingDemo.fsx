@@ -93,7 +93,16 @@ See `TextPreprocessing.fsx`
 *)
 
 (**
-#### 4) Bag of words
+#### 4) Stop words removal
+*)
+
+(**
+- Removing stop words such as "and", "the", "is", and "are"
+- List of stopwords available from item 70 on http://www.nltk.org/nltk_data/.
+*)
+
+(**
+#### 5) Bag of words
 *)
 
 (**
@@ -107,6 +116,7 @@ See `TextPreprocessing.fsx`
 #load "TextPreprocessing.fsx"
 open Preprocessing.Normalization
 open Preprocessing.Tokenization
+open Preprocessing.StopWords
 
 type CallId = 
     {Ticker: string; Exchange: string} 
@@ -129,7 +139,6 @@ type Call =
 
 let generateCall (xs: LabeledTranscript) = 
     let callId = {Ticker = fst xs.TickerExchange ; Exchange = snd xs.TickerExchange}
-    let signal = xs.CumulativeReturn
     let wordCount = 
         xs.EarningsCall
         // Normalization
@@ -137,6 +146,8 @@ let generateCall (xs: LabeledTranscript) =
         |> expandContractions
         // Tokenization
         |> nGrams 1
+        // Stop words removal
+        |> Seq.filter (fun textItem -> not (nltkStopWords |> Seq.contains textItem))
         // Bag of words
         |> Seq.countBy id
         |> Seq.map (fun (word, count) -> {Word=word; Count=count})
@@ -144,7 +155,7 @@ let generateCall (xs: LabeledTranscript) =
 
     { CallId = callId
       WordCount = wordCount
-      Signal = signal }
+      Signal = xs.CumulativeReturn }
 
 let trainCalls, testCalls = 
     train
@@ -243,9 +254,6 @@ return. (screening-score $f_{j}$)
 2. Compare $f_{j}$ with proper thresholds and create the sentiment-charged set of words $S$.
 *)
 
-
-
-
 (**
 #### 1A) Screening Score
 
@@ -273,7 +281,7 @@ type TextItemScreening =
     { TextItem: string
       Score: float
       Count: float 
-      CountType : CountType}
+      CountType: CountType }
 
 /// Vector of item counts per Group (Flag) (Bag of words per group)
 let itemOccurenceByGroup, itemFrequencyByGroup = 
@@ -344,8 +352,8 @@ let getScores (wordSentimentMap: Map<Sentiment, Map<string, int>>)
     |> Map
 
 let itemOccurenceScores, itemFrequencyScores = 
-    getScores itemFrequencyByGroup Frequency, 
-    getScores itemOccurenceByGroup Occurence
+    getScores itemOccurenceByGroup Occurence, 
+    getScores itemFrequencyByGroup Frequency
 
 (**
 Histogram: Item scores
@@ -373,7 +381,11 @@ The thresholds ($\alpha{+}, \alpha{-}, \kappa$) are *hyper-parameters* that can 
 *)
 
 /// Sentiment-charged words
+
 let getChargedItems alphaLower alphaUpper kappaPct = 
+
+    // Count of text item in all articles
+    let kappa = kappaPct * float train.Length
 
     // Upper and lower score thresholds
     let upperThresh, lowerThresh = 
@@ -381,44 +393,19 @@ let getChargedItems alphaLower alphaUpper kappaPct =
         |> Array.filter (fun xs -> xs.Flag = Positive)
         |> fun xs -> float xs.Length / float train.Length
         |> fun pieHat -> (pieHat + alphaUpper), (pieHat - alphaLower)
+    
+    let isCharged item = 
+        match itemFrequencyScores.TryFind item, itemOccurenceScores.TryFind item with
+        | Some freqScore, Some occScore -> 
+            if ((freqScore.Score >= upperThresh || freqScore.Score <= lowerThresh) && (occScore.Count >= kappa))
+            then Some item
+            else None
+        | _ -> None
 
-    // Count of text item in all articles
-    let kappa = kappaPct * float train.Length
+    vocabulary
+    |> Array.choose isCharged
 
-    // Screening
-    let isCharged itemInfo =
-        (itemInfo.Score >= upperThresh || itemInfo.Score <= lowerThresh) && (itemInfo.Count >= kappa)
-
-    itemScores
-    |> Map.toSeq
-    |> Seq.filter (fun (_, itemInfo) -> isCharged itemInfo)
-    |> Seq.toArray
-
-    /// Making sure number of words in each group is equal
-    |> fun allWords ->
-        let negativeWords = 
-            allWords 
-            |> Array.filter (fun (_, score) -> score.Score <= lowerThresh)
-            |> Array.sortBy (fun (_, score) -> score.Score)
-        
-        let positiveWords = 
-            allWords 
-            |> Array.filter (fun (_, score) -> score.Score >= upperThresh)
-            |> Array.sortByDescending (fun (_, score) -> score.Score)
-
-        if negativeWords.Length > positiveWords.Length 
-        then
-            negativeWords
-            |> Array.take (positiveWords.Length)
-            |> fun xs -> 
-               Array.concat [|xs; positiveWords|]
-        else 
-            positiveWords
-            |> Array.take (negativeWords.Length)
-            |> fun xs -> 
-                Array.concat [|xs; negativeWords|]
-
-let alphaLower, alphaUpper, kappa  = (0.001, 0.001, 0.75)
+let alphaLower, alphaUpper, kappa  = (0.0045, 0.0045, 0.85)
 let chargedItems = getChargedItems alphaLower alphaUpper kappa
 
 chargedItems.Length
@@ -437,7 +424,7 @@ let filterCall (call: Call): Call =
 
     let filteredItemCounts = 
         chargedItems
-        |> Array.Parallel.map (fun (chargedWord, _) -> 
+        |> Array.Parallel.map (fun chargedWord -> 
             match callMap.TryFind chargedWord with
             | Some wordCount -> wordCount
             | None -> {Word=chargedWord;Count = 0})
@@ -627,12 +614,12 @@ let objF (call: Call) (p: float) (lambda: float) =
         
 let computeScore (call: Call) = 
     [|0. .. 0.01 .. 1.|]
-    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.005))
+    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.00005))
     |> Array.maxBy snd
 
 let classTest = 
-    test
-    |> Array.sortBy (fun xs -> xs.Signal)
+    testCalls
+    |> Array.sortByDescending (fun xs -> xs.Signal)
     |> Array.take 100
     |> Array.map (fun xs -> 
         let res = computeScore xs
