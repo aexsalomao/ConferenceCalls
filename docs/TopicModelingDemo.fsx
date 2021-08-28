@@ -12,8 +12,6 @@ index: 4
 *)
 
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
-#r "nuget: FSharp.Collections.ParallelSeq"
-#r "nuget: FSharp.Data"
 #r "nuget: Newtonsoft.Json"
 #r "nuget: MathNet.Numerics.FSharp, 4.15.0"
 
@@ -22,7 +20,6 @@ open System
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
-open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
 open MathNet.Numerics.LinearAlgebra
@@ -55,13 +52,12 @@ let train, test =
         let cutoff = float xs.Length * 0.8
         xs.[.. int cutoff], xs.[int cutoff + 1 ..]
 
-
 (**
-## Text Preprocessing: Bag of words
+## Text Preprocessing
 *)
 
 (**
-See `TextPreprocessing.fsx`
+Text data, unstructured data ... 
 *)
 
 (**
@@ -80,7 +76,7 @@ See `TextPreprocessing.fsx`
 
 (**
 - Analyze words as a single root, e.g, "dissapointment" to "dissapoint"
-- Porters algorithm
+- Porters algorithm 
 *)
 
 (**
@@ -88,8 +84,17 @@ See `TextPreprocessing.fsx`
 *)
 
 (**
-- Split each article into a list of words or phrases
-- NGrams
+Split each article into a list of words or phrases or nGrams
+
+**Original**: "The five boxing wizards jump quickly"
+
+**1Gram**: 
+
+- ["The", "five", "boxing", "wizards", "jump", "quickly"]
+
+**2Grams**:
+
+- ["The five", "five boxing", "boxing wizards", "wizards jump", "jump quickly"]
 *)
 
 (**
@@ -98,7 +103,7 @@ See `TextPreprocessing.fsx`
 
 (**
 - Removing stop words such as "and", "the", "is", and "are"
-- List of stopwords available from item 70 on http://www.nltk.org/nltk_data/.
+- List of stopwords taken from item 70 on http://www.nltk.org/nltk_data/.
 *)
 
 (**
@@ -116,7 +121,7 @@ See `TextPreprocessing.fsx`
 #load "TextPreprocessing.fsx"
 open Preprocessing.Normalization
 open Preprocessing.Tokenization
-open Preprocessing.StopWords
+open Preprocessing.NltkData
 
 type CallId = 
     {Ticker: string; Exchange: string} 
@@ -147,7 +152,7 @@ let generateCall (xs: LabeledTranscript) =
         // Tokenization
         |> nGrams 1
         // Stop words removal
-        |> Seq.filter (fun textItem -> not (nltkStopWords |> Seq.contains textItem))
+        |> Seq.choose removeStopWords
         // Bag of words
         |> Seq.countBy id
         |> Seq.map (fun (word, count) -> {Word=word; Count=count})
@@ -256,32 +261,13 @@ return. (screening-score $f_{j}$)
 
 (**
 #### 1A) Screening Score
-
-Before computing any scores, we need to first find out the frequency and "occurence" of each word or text item in the corpus of documents.
-
-While the frequency of each text item or word is simply its total count across all documents, an item's occurence is equivalent to the total count of *documents* that include text item *j*.
-
-We can then define two variants of screening scores:
-
-1. Screening score based on total word frequency:
-
-$$f_{j} = \frac{{\text{count of word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of word } j \text{ in all articles}} $$
-
-2. Screening score based on word occurence across documents:
-
-$$f_{j}^{*} = \frac{{\text{count of articles including word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of articles including word } j }$$
-
 *)
 
-type CountType = 
-    | Frequency
-    | Occurence
+(**
+Before computing any scores, we need to first find out the frequency and "occurence" of each word or text item in the corpus of documents.
 
-type TextItemScreening =
-    { TextItem: string
-      Score: float
-      Count: float 
-      CountType: CountType }
+While the frequency of each text item or word is simply its total count across all documents, an item's occurence is equivalent to the total count of *documents* that include it.
+*)
 
 /// Vector of item counts per Group (Flag) (Bag of words per group)
 let itemOccurenceByGroup, itemFrequencyByGroup = 
@@ -314,6 +300,34 @@ let countOfItemInGroup (group: Sentiment)
     wordSentimentMap.TryFind group
     |> Option.bind (fun xs -> xs.TryFind item)
 
+
+countOfItemInGroup Positive itemFrequencyByGroup "sales"
+countOfItemInGroup Positive itemOccurenceByGroup "sales"
+
+(**
+While the frequency of each text item or word is simply its total count across all documents, an item's occurence is equivalent to the total count of *documents* that include text item *j*.
+
+We can then define two variants of screening scores:
+
+1. Screening score based on total word frequency:
+
+$$f_{j} = \frac{{\text{count of word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of word } j \text{ in all articles}} $$
+
+2. Screening score based on word occurence across documents:
+
+$$f_{j}^{*} = \frac{{\text{count of articles including word } j \text{ in articles with } sgn(y) = +1 }}{\text{count of articles including word } j }$$
+*)
+
+type CountType = 
+    | Frequency
+    | Occurence
+
+type TextItemScreening =
+    { TextItem: string
+      Score: float
+      Count: float 
+      CountType: CountType }
+
 /// Vocabulary (training set only)
 let vocabulary =
     trainCalls
@@ -335,7 +349,8 @@ let getScores (wordSentimentMap: Map<Sentiment, Map<string, int>>)
 
         match posN, negN with
         | Some p, Some n -> 
-            let score, count = (float p) / ((float p) + (float n)), float (p + n)
+            let count = float (p + n)
+            let score = (float p) / count
             Some (generateItemScore item score count)
         | Some p, None -> 
             let score, count = 1., float p
@@ -381,7 +396,6 @@ The thresholds ($\alpha{+}, \alpha{-}, \kappa$) are *hyper-parameters* that can 
 *)
 
 /// Sentiment-charged words
-
 let getChargedItems alphaLower alphaUpper kappaPct = 
 
     // Count of text item in all articles
@@ -405,7 +419,7 @@ let getChargedItems alphaLower alphaUpper kappaPct =
     vocabulary
     |> Array.choose isCharged
 
-let alphaLower, alphaUpper, kappa  = (0.0045, 0.0045, 0.85)
+let alphaLower, alphaUpper, kappa  = (0.000005, 0.000005, 0.85)
 let chargedItems = getChargedItems alphaLower alphaUpper kappa
 
 chargedItems.Length
@@ -427,7 +441,7 @@ let filterCall (call: Call): Call =
         |> Array.Parallel.map (fun chargedWord -> 
             match callMap.TryFind chargedWord with
             | Some wordCount -> wordCount
-            | None -> {Word=chargedWord;Count = 0})
+            | None -> {Word=chargedWord; Count = 0})
         |> Array.sortBy (fun xs -> xs.Word)
     
     { CallId = call.CallId
@@ -440,10 +454,13 @@ let chargedTrain =
 
 let getDocumentTermMatrix (calls: Call []) = 
     calls
+    |> Array.sortBy (fun xs -> xs.Signal)
     |> Array.map (fun xs -> 
         xs.WordCount 
-        |> Array.map (fun xs -> float xs.Count))
+        |> Array.map (fun xs -> double xs.Count))
     |> matrix
+    |> fun xs -> 
+        xs.Transpose()
 
 let chargedDocumentTermMatrix = getDocumentTermMatrix chargedTrain
 
@@ -508,18 +525,18 @@ $$\widehat{h_{i}} = \frac{d_{[\widehat{S}], i}}{\widehat{s}_{i}} \text{      } \
 *)
 
 let bigH = 
-    chargedTrain
-    |> getDocumentTermMatrix
+    chargedDocumentTermMatrix
     |> fun m ->
         m.ToColumnArrays()
         |> Array.map (fun itemCounts -> 
-            let sumOfItemCounts = 
-                Array.sum itemCounts
+            let sumOfItemCounts = Array.sum itemCounts 
 
             itemCounts 
             |> Array.map (fun xs -> 
                 xs / sumOfItemCounts))
         |> matrix
+        |> fun xs ->
+            xs.Transpose()
 
 bigH.RowCount
 bigH.ColumnCount
@@ -536,17 +553,18 @@ $$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}
 
 let bigW = 
 
-    let n = chargedTrain.Length
+    let n = double chargedDocumentTermMatrix.ColumnCount
 
-    chargedTrain
-    |> Array.sortBy (fun xs -> xs.Signal)
+    chargedDocumentTermMatrix.ToColumnArrays()
     |> Array.mapi (fun i _ -> 
-        (float (i + 1)/float n))
+        (double (i + 1)/ n))
     |> fun xs -> 
         matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
 
 bigW.RowCount
 bigW.ColumnCount
+
+bigH.Multiply(bigW.Transpose())
 
 (**
 #### $O$
@@ -610,20 +628,20 @@ let objF (call: Call) (p: float) (lambda: float) =
         let d = float xs.Count
         d * log (pos + neg))
     |> fun expr ->
-        (sHat *(Array.sum expr)) + (lambda * log (p * (1. - p)))
+        (sHat *(Array.sum expr))
         
 let computeScore (call: Call) = 
     [|0. .. 0.01 .. 1.|]
-    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.00005))
+    |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.00001))
     |> Array.maxBy snd
 
 let classTest = 
-    testCalls
-    |> Array.sortByDescending (fun xs -> xs.Signal)
-    |> Array.take 100
-    |> Array.map (fun xs -> 
-        let res = computeScore xs
-        res)
+    trainCalls
+    |> Array.sortBy (fun xs -> xs.Signal)
+    |> Array.take 2000
+    |> Array.averageBy (fun xs -> 
+        let res = computeScore xs |> fst
+        res |> fst)
 
 (**
 DiffSharp demo
@@ -658,7 +676,6 @@ let computeScore' (call: Call) (x: Tensor) =
         (sHat * sumExpr) + (0.001 * log (scoreP * (1. - scoreP)))
         |> fun xs -> xs * -1.
     
-
 let lr, momentum, iters, threshold = 1e-3, 0.5, 1000, 1e-3
 
 let scoreFun = computeScore' negativeArticleTrain
@@ -666,4 +683,3 @@ let scoreFun = computeScore' negativeArticleTrain
 let scorePGuess = dsharp.tensor([0.5])
 
 let scoreFx, params' = optim.sgd(scoreFun, scorePGuess, lr=dsharp.tensor(lr), momentum=dsharp.tensor(momentum), nesterov=true, iters=iters, threshold=threshold)
-
