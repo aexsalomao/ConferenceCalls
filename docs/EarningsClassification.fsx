@@ -103,6 +103,11 @@ shortParagraphs
 ## Labelling transcripts: Market sentiment
 *)
 
+#load "TextPreprocessing.fsx"
+open Preprocessing.Normalization
+open Preprocessing.Tokenization
+open Preprocessing.NltkData
+
 type Label = 
     | Positive
     | Negative
@@ -123,6 +128,16 @@ type LabeledTranscript =
         // Label
         labelFromRet this.CumulativeReturn 0.1
 
+let preprocessText (text: string) = 
+    // Normalization
+    text
+    |> getOnlyWords
+    |> expandContractions
+    // Tokenization
+    |> nGrams 1
+    // Stop words removal
+    |> Seq.choose removeStopWords
+
 let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
     
     dataset 
@@ -133,6 +148,7 @@ let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] =
             xs.Transcript.Paragraphs
             |> Seq.filter (fun p -> p.Length > 100) // Keep long paragraphs
             |> Seq.skip 1 // Usually another (longer) opening statement from the "Operator"
+            |> Seq.collect preprocessText
             |> String.concat (" ")
 
         { TickerExchange = tickerExchange

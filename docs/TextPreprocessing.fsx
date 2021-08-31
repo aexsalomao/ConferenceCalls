@@ -73,6 +73,7 @@ module Normalization =
         ("these've", "these have")
         ("they'll", "they will")
         ("they've", "they have")
+        ("they're", "they are")
         ("those're", "those are")
         ("those've", "those have")
         ("wanna", "want to")
@@ -109,7 +110,7 @@ module Normalization =
         if word.Contains("'") then 
             match englishContractions.TryFind word with
             | Some expandedWord -> Some expandedWord
-            | None -> Some word
+            | None -> None
         else Some word
 
     let expandContractions (textItem: string) = 

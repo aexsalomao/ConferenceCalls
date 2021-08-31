@@ -142,17 +142,21 @@ type Call =
         if this.Signal > 0. then Positive
         else Negative
 
+let preprocessText (text: string) = 
+    // Normalization
+    text
+    |> getOnlyWords
+    |> expandContractions
+    // Tokenization
+    |> nGrams 1
+    // Stop words removal
+    |> Seq.choose removeStopWords
+
 let generateCall (xs: LabeledTranscript) = 
     let callId = {Ticker = fst xs.TickerExchange ; Exchange = snd xs.TickerExchange}
     let wordCount = 
         xs.EarningsCall
-        // Normalization
-        |> getOnlyWords
-        |> expandContractions
-        // Tokenization
-        |> nGrams 1
-        // Stop words removal
-        |> Seq.choose removeStopWords
+        |> preprocessText
         // Bag of words
         |> Seq.countBy id
         |> Seq.map (fun (word, count) -> {Word=word; Count=count})
@@ -300,7 +304,6 @@ let countOfItemInGroup (group: Sentiment)
     wordSentimentMap.TryFind group
     |> Option.bind (fun xs -> xs.TryFind item)
 
-
 countOfItemInGroup Positive itemFrequencyByGroup "sales"
 countOfItemInGroup Positive itemOccurenceByGroup "sales"
 
@@ -419,7 +422,7 @@ let getChargedItems alphaLower alphaUpper kappaPct =
     vocabulary
     |> Array.choose isCharged
 
-let alphaLower, alphaUpper, kappa  = (0.000005, 0.000005, 0.85)
+let alphaLower, alphaUpper, kappa  = (0.0075, 0.0075, 0.5)
 let chargedItems = getChargedItems alphaLower alphaUpper kappa
 
 chargedItems.Length
@@ -431,15 +434,15 @@ chargedItems.Length
 
 let filterCall (call: Call): Call = 
 
-    let callMap = 
-        call.WordCount 
-        |> Array.map (fun xs -> xs.Word, xs) 
+    let textItemsFromCall = 
+        call.WordCount
+        |> Array.map (fun xs -> xs.Word, xs)
         |> Map
 
     let filteredItemCounts = 
         chargedItems
-        |> Array.Parallel.map (fun chargedWord -> 
-            match callMap.TryFind chargedWord with
+        |> Array.map (fun chargedWord -> 
+            match textItemsFromCall.TryFind chargedWord with
             | Some wordCount -> wordCount
             | None -> {Word=chargedWord; Count = 0})
         |> Array.sortBy (fun xs -> xs.Word)
@@ -451,6 +454,8 @@ let filterCall (call: Call): Call =
 let chargedTrain = 
     trainCalls
     |> Array.Parallel.map filterCall
+    // Remove "empty document vectors"
+    |> Array.filter (fun xs -> xs.WordCount |> Array.sumBy (fun xs -> xs.Count) |> fun xs -> xs <> 0)
 
 let getDocumentTermMatrix (calls: Call []) = 
     calls
@@ -459,8 +464,7 @@ let getDocumentTermMatrix (calls: Call []) =
         xs.WordCount 
         |> Array.map (fun xs -> double xs.Count))
     |> matrix
-    |> fun xs -> 
-        xs.Transpose()
+    |> fun xs -> xs.Transpose()
 
 let chargedDocumentTermMatrix = getDocumentTermMatrix chargedTrain
 
@@ -529,14 +533,13 @@ let bigH =
     |> fun m ->
         m.ToColumnArrays()
         |> Array.map (fun itemCounts -> 
-            let sumOfItemCounts = Array.sum itemCounts 
+            let sumOfItemCounts = 
+                Array.sum itemCounts 
 
             itemCounts 
-            |> Array.map (fun xs -> 
-                xs / sumOfItemCounts))
+            |> Array.map (fun xs -> xs / sumOfItemCounts))
         |> matrix
-        |> fun xs ->
-            xs.Transpose()
+        |> fun xs -> xs.Transpose()
 
 bigH.RowCount
 bigH.ColumnCount
@@ -552,12 +555,12 @@ $$\widehat{p}_{i} = \frac{\text{rank of } y_{i} \text{ in } \{y_{l}\}_{l=1}^{n}}
 *)
 
 let bigW = 
-
-    let n = double chargedDocumentTermMatrix.ColumnCount
+    let n = 
+        double chargedDocumentTermMatrix.ColumnCount
 
     chargedDocumentTermMatrix.ToColumnArrays()
     |> Array.mapi (fun i _ -> 
-        (double (i + 1)/ n))
+        double (i + 1)/ n)
     |> fun xs -> 
         matrix [|xs; xs |> Array.map (fun p -> (1. - p))|]
 
@@ -600,7 +603,12 @@ bigO.ColumnCount
 
 (**
 Estimating $p$ (sentiment score) for new articles using maximum likelihood estimation:
+
 $$\widehat{p} = \arg\max_{p\in[\,0, 1]\,} \left\{\hat{s}^{-1} \sum_{j \in \widehat{S}}{d_{j}\log \left(p \widehat{O}_{+, j} + (\,1-p)\,\widehat{O}_{-, j}\right) + \lambda \log \left(p\left(1 - p \right)\right) \right\}$$
+
+$\hat{s}\text{ is the total count of words from } \widehat{S} \text{ in the new article,} \left(d_{j}, \widehat{O}_{+, j},  \widehat{O}_{-, j} \right) \text{ are the } j \text{th entries of the corresponding vectors, and } \lamda $
+
+For sentiment charged words, their corresponding entries in $O$ should be different. Otherwise, these words would not represent any sentiment and should be left out of the set of sentiment charged words. Sentiment neutral words are analogous to useless predictors in a linear model.
 *)
 
 (**
@@ -635,10 +643,19 @@ let computeScore (call: Call) =
     |> Array.map (fun scoreP -> (scoreP, call.Signal), (objF call scoreP 0.00001))
     |> Array.maxBy snd
 
-let classTest = 
-    trainCalls
+let testHighSignals = 
+    testCalls
+    |> Array.take 100
+    |> Array.map (fun xs -> 
+        let res = computeScore xs
+        res)
+    |> Array.sortBy snd
+
+
+let testLowSignals = 
+    testCalls
     |> Array.sortBy (fun xs -> xs.Signal)
-    |> Array.take 2000
+    |> Array.take 500
     |> Array.averageBy (fun xs -> 
         let res = computeScore xs |> fst
         res |> fst)
