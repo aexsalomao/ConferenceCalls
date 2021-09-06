@@ -5,8 +5,6 @@
 open System
 open System.IO
 open FSharp.Data
-open Common
-open Common.Tiingo
 
 /// TranscriptParsing
 type CallId =
@@ -27,11 +25,6 @@ type Sentiment =
 
 type EarningsAnnouncementReturn =
     { EarningsCall: EarningsCall
-      TiingoObs: TiingoObs [] 
-      Sentiment : Sentiment option} with
-      // Returns Window
-      member this.ReturnWindow = 
-        1.
-     // Earnigns Announcement Return
-      member this.Ear = 
-        this.ReturnWindow
+      TiingoObs: Common.Tiingo.TiingoObs []
+      Sentiment: Sentiment option 
+      Ear: float option }

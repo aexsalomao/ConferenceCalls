@@ -276,6 +276,17 @@ let adjustedReturns (stock : ReturnObs []) =
 #### EAR
 *)
 
+type Sentiment = 
+    | Positive
+    | Negative
+    | Neutral
+
+type EarningsAnnouncementReturn =
+    { EarningsCall: EarningsCall
+      TiingoObs: Common.Tiingo.TiingoObs []
+      Sentiment: Sentiment option 
+      Ear: float option }
+
 /// Find first observed return
 let firstReturnAfterCall (call: EarningsCall) (returnObs: ReturnObs []) = 
     let date = call.CallId.Date
@@ -295,19 +306,6 @@ let computeEar (call: EarningsCall) (tiingoObs: Tiingo.TiingoObs []) =
         | Some threeDayWindow -> Some (adjustedReturns threeDayWindow)
         | None -> None)
 
-type Sentiment = 
-    | Positive
-    | Negative
-    | Neutral
-
-type EarningsAnnouncementReturn =
-    { EarningsCall: EarningsCall
-      TiingoObs: TiingoObs []
-      Sentiment: Sentiment option } 
-    // Earnings Announcement (cumulative abnormal) Return
-    member this.Ear: option<float> = 
-        computeEar this.EarningsCall this.TiingoObs
-
 let generateEar (call: EarningsCall) = 
     let pastThresh, futureThresh = 
         let flatDate = call.CallId.Date.Date
@@ -318,7 +316,8 @@ let generateEar (call: EarningsCall) =
         // For now lets set Sentiment to None
         { EarningsCall = call
           TiingoObs = xs
-          Sentiment = None})
+          Sentiment = None
+          Ear = computeEar call xs })
 
 let tslaCall = 
     myCalls
@@ -334,31 +333,10 @@ tslaCall |> Option.bind (fun xs -> xs.Ear)
 let calls2018, calls2019, calls2020, calls2021 = 
     myCalls
     |> fun xs ->
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2018)),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2019)),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2020)),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2021))
-
-let ears2018 = 
-    calls2018
-    |> Array.Parallel.choose generateEar
-    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
-
-let ears2019 = 
-    calls2019
-    |> Array.Parallel.choose generateEar
-    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
-
-let ears2020 = 
-    calls2020
-    |> Array.Parallel.choose generateEar
-    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
-
-let ears2021 = 
-    calls2021
-    |> Array.Parallel.choose generateEar
-    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
-
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2018) ),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2019) ),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2020) ),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2021) )
 
 (**
 ### Download and Export to Json
@@ -368,8 +346,3 @@ let ears2021 =
 let AnnouncementDayReturnToJson (fileName: string) (ears: EarningsAnnouncementReturn [])  = 
     JsonConvert.SerializeObject(ears)
     |> fun json -> IO.File.WriteAllText(fileName, json)
-
-AnnouncementDayReturnToJson "data-cache/ReturnsAroundEarningsDemo.json" ears2018
-AnnouncementDayReturnToJson "data-cache/ReturnsAroundEarningsDemo.json" ears2018
-AnnouncementDayReturnToJson "data-cache/ReturnsAroundEarningsDemo.json" ears2018
-AnnouncementDayReturnToJson "data-cache/ReturnsAroundEarningsDemo.json" ears2018
