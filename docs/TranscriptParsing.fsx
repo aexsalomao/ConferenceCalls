@@ -148,7 +148,6 @@ let findTickerExchange (doc: TranscriptDocument): option<string * string> =
     |> cleanTickerExchangeText
     |> Option.bind tryTickerExchange
 
-
 // Tesla ticker and exchange
 findTickerExchange teslaDoc
 
@@ -253,10 +252,10 @@ findDateTime teslaDoc
 
 (**
 The transcript itself can also be easily parsed using the `CssSelect()` method.
-In html, blocks of text or paragraphs are defined with the <p> tag: 
+In html, blocks of text or paragraphs are defined with the "<p>" tag: 
 *)
 
-let findParagraphs (doc: HtmlDocument): string [] = 
+let findParagraphs (doc: TranscriptDocument): string [] = 
     doc.CssSelect("p")
     |> Seq.map (fun x -> x.InnerText().Trim())
     // Remove empty paragraphs
@@ -265,7 +264,7 @@ let findParagraphs (doc: HtmlDocument): string [] =
     |> Seq.skip 5
     |> Seq.toArray
 
-let firstCharacters (paragraph:string) = 
+let firstCharacters (paragraph: string) = 
     if paragraph.Length <= 50 
     then paragraph 
     else paragraph.[..49] + " ... "
@@ -279,8 +278,60 @@ teslaDoc
 
 (*** include-output***)
 
+
 (**
-## Transcript Record
+## Transcript - Fiscal Quarter
+*)
+
+(**
+Although we have already found a way to fetch the exact time and date 
+of each earnings call, we could also fetch from the title of each 
+transcript the quarter of which each call refers to.
+
+Example titles:
+
+- Microsoft (MSFT) *Q4* 2021 Earnings Call Transcript
+- Tesla (TSLA) *Q2* 2021 Earnings Call Transcript
+- IBM (IBM) *Q2* 2021 Earnings Call Transcript
+
+We can already see a pattern emerging from the titles:
+
+- CompanyName (CompanyTicker) *Q[1,2,3,4]* 0000 Earnings Call Transcript 
+
+Having idendified this pattern, we can create a [Regular Expression](https://docs.microsoft.com/en-us/dotnet/standard/base-types/regular-expression-language-quick-reference)
+Regex) pattern to help us extract the fiscal quarter from each title.
+*)
+
+open System.Text.RegularExpressions
+
+/// Regular Expression
+let quarterRegex = Regex("Q\d{1}")
+
+/// Extract number from "Q\d{1}"
+let getQNumb (q: string): option<int> = 
+    Seq.toArray q
+    |> fun xs ->
+        match xs with
+        | [|q; qNumb|] -> Some (qNumb |> Char.GetNumericValue |> int)
+        | _ -> None
+
+let findFiscalQuarter (doc: TranscriptDocument): option<int> = 
+    doc.CssSelect("title")
+    |> Seq.map (fun xs -> 
+        xs.InnerText() 
+        |> quarterRegex.Match 
+        |> fun xs -> xs.Value)
+    // Check if there is exactly one match
+    |> Seq.tryExactlyOne
+    // Convert string to int
+    |> Option.bind getQNumb
+
+findFiscalQuarter teslaDoc
+
+(*** include-output***)
+
+(**
+## EarnignsCall Record
 *)
 
 (**
@@ -289,39 +340,48 @@ an html transcript document. Since they all work with the `TranscriptDocument`
 type, we can easily combine these functions together to form one single function 
 that returns all the individual bits of data that we want.
 
-We'll use a record called `Transcript` to hold all the information we want.
+We'll use a record called `EarningsCall` to hold all our information.
 *)
 
-type TranscriptId =
+type CallId =
     { Ticker: string 
       Exchange: string
-      Date: System.DateTime }
+      Date: System.DateTime
+      FiscalQuarter : int }
 
-type Transcript = 
-    { TranscriptId : TranscriptId
-      Paragraphs: string [] }
+type EarningsCall = 
+    { CallId : CallId
+      Transcript: string [] }
 
 /// Search for ticker, exchange, date and paragraphs
-let parseTrancriptDoc (doc: TranscriptDocument)=
+let parseTrancriptDoc (doc: TranscriptDocument): option<EarningsCall> =
     let matchExpr =  
         findTickerExchange doc, 
-        findDateTime doc   
+        findDateTime doc,
+        findFiscalQuarter doc
      
     match matchExpr with
-    | Some (ticker, exchange), Some date -> 
-        let transcriptId = {Ticker=ticker; Exchange=exchange; Date=date}
-        Some { TranscriptId = transcriptId
-               Paragraphs = findParagraphs doc }
+    | Some (ticker, exchange), 
+      Some date,
+      Some fiscalQuarter -> 
+        let callId = 
+            { Ticker = ticker 
+              Exchange = exchange
+              Date = date 
+              FiscalQuarter = fiscalQuarter }
+        
+        Some { CallId = callId
+               Transcript = findParagraphs doc }
     | _ -> None
 
 /// Tesla transcript record
 let teslaTranscript = parseTrancriptDoc teslaDoc
 
 teslaTranscript 
-|> Option.iter(fun x -> 
-    printfn $"Id:\n{x.TranscriptId}\n"
+|> Option.iter(fun xs -> 
+    printfn $"Id:\n{xs.CallId}\n"
     printfn $"First 5 paragraphs:"
-    x.Paragraphs
+    xs.Transcript
     |> Array.truncate 5
     |> Array.map firstCharacters 
     |> Array.iter (printfn "%A"))
@@ -329,7 +389,7 @@ teslaTranscript
 
 (**
 Now that we have a working function that takes in a `TranscriptDocument` and
-returns a `Transcript` type, lets try to parse all of the transcript urls from 
+returns a `EarningsCall` type, lets try to parse all of the transcript urls from 
 `exampleFrontPageDoc`.
 *)
 
@@ -350,7 +410,7 @@ printfn $"N: {exampleTranscripts.Length}"
 exampleTranscripts
 |> Array.take 5
 |> Array.iter (fun xs -> 
-    let tId = xs.TranscriptId
+    let tId = xs.CallId
     printfn $"TranscriptId: %4s{tId.Ticker}, %6s{tId.Exchange}, {tId.Date}")
 
 (*** include-output ***)
@@ -374,7 +434,7 @@ let transcriptTimesHistogram =
 
     let callTimes = 
         exampleTranscripts
-        |> Array.map (fun xs -> xs.TranscriptId.Date.TimeOfDay.ToString())
+        |> Array.map (fun xs -> xs.CallId.Date.TimeOfDay.ToString())
         |> Array.sort
     
     callTimes
@@ -451,7 +511,8 @@ let asyncPages (pages: int list) =
     transcripts
 
 (***do-not-eval***)
-let exampleTranscriptsAsync = asyncPages [ 200 .. 201 ]
+// Done
+let examplePages = asyncPages [1 .. 5]
 
 (**
 ## Export to json
@@ -462,9 +523,9 @@ open Newtonsoft.Json
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 
-let transcriptsToJson (fileName: string) (transcripts: Transcript []) = 
-    JsonConvert.SerializeObject(transcripts)
+let transcriptsToJson (fileName: string) (calls: EarningsCall []) = 
+    JsonConvert.SerializeObject(calls)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
 (*** do-not-eval***)
-transcriptsToJson "data-cache/TranscriptsDemo.json" exampleTranscripts
+transcriptsToJson "data-cache/examplePages.json" examplePages

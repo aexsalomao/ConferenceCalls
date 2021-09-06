@@ -10,7 +10,7 @@ open FSharp.Data
 #load "C:\Users\Five star\Documents\GitHub\ConferenceCalls\Secrets.fsx"
 
 type Frequency = Daily | Monthly
-type ReturnObs = { Symbol : string; Date : DateTime; Return : float }
+type ReturnObs = { Symbol: string; Date: DateTime; Return : float }
 
 module Tiingo =
 
