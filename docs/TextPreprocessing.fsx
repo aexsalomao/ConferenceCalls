@@ -129,7 +129,7 @@ module Tokenization =
 module NltkData = 
 
     let stopWords = 
-        [
+        Set [
         "i"
         "me"
         "my"
@@ -304,15 +304,10 @@ module NltkData =
 
     let removeStopWords (textItem: string) = 
 
-        let initWords = textItem.Split(" ")
-       
-        initWords
-        |> Array.choose (fun item ->
-            if (List.contains item stopWords) then None
-            else Some item)
-        |> fun xs -> 
-            if xs = initWords then Some textItem
-            else None
+        let remaining = 
+            textItem.Split(" ")
+            |> Array.filter (fun word -> not (stopWords.Contains word))
+        if Array.isEmpty remaining then None else Some remaining
 
 module TermFrequencies = 
 
