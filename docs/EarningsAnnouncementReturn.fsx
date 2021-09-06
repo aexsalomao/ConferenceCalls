@@ -15,7 +15,9 @@ index: 2
 In the `TranscriptParsing.fsx` script, we downloaded earnings call transcripts, 
 ticker and exchange information, and even the exact date and time of each earnings call. 
 Ok great, now what ?
+*)
 
+(**
 In finance, a growing body of literature is concerned with applying 
 state of the art *text-mining* techniques on textual data with the objective 
 of conducting *sentiment analysis*. Such analysis is often conducted using 
@@ -28,14 +30,18 @@ Additionally, as the names suggest, while supervised learning algorithms
 algorithms do not. For this very reason, it is often the case that, when compared 
 to unsupervised learning, supervised learning techniques are regarded as 
 less complex and more "trustworthy".
+*)
 
+(**
 Here are some examples:
 
 - Supervised learning: Support vector machine, Neural network, Linear and logistics regression, 
 random forest, and Classification trees.
 
 - Unsupervised learning: K-means, Hierarchical clustering, Principal Component Analysis (PCA)
+*)
 
+(**
 In the case of the earnings calls dataset that we formed by parsing motley fool, 
 we can *label* each call according to the realized returns around the time of the 
 earnings call. We can then use these returns as a proxy that indicates the overall 
