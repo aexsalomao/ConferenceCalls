@@ -48,7 +48,7 @@ earnings call. We can then use these returns as a proxy that indicates the overa
 "sentiment" of each call. The literature refers to these returns as the Earnings Announcement 
 Return, or EAR. From EAR, we can proceed to define or label each earnings calls as 
 being either "Positive" or "Negative". The EAR any given firm (stock) is simply its 
-abnormal return over a three day window ***centered** on the earnings announcement.
+abnormal return over a three day window ***centered*** on the earnings announcement.
 *)
 
 (**
