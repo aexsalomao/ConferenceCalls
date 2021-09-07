@@ -168,8 +168,7 @@ module French =
           Hml : float
           Rf : float 
           Frequency : Frequency } 
-
-
+          
     let private frenchDay x = 
         DateTime.ParseExact(x,
             "yyyyMMdd",

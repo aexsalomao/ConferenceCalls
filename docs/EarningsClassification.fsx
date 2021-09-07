@@ -13,10 +13,9 @@ index: 2
 
 (**
 After dowloading earnings transcripts from Motley Fool, we proceeded to compute 
-the *excess* cumulative returns of each respective company around its earnings call 
-in `ReturnsAroundEarnings.fsx`. We can now use the excess cumulative returns we have 
-computed as a *proxy* that is meant to measure the market's overall sentiment towards 
-a given earnings call.
+the EAR of each respective company around its earnings call in `EarningsAnnouncementReturn.fsx`. 
+We can now use the EAR of each call as a *proxy* that is meant to measure the market's 
+overall sentiment towards a given earnings call.
 
 More specifically, we'll place company transcripts into buckets according to some 
 pre-specified excess cumulative return threshold:

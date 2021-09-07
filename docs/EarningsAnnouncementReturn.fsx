@@ -55,6 +55,9 @@ abnormal return over a three day window ***centered*** on the earnings announcem
 ## Import packages and load scripts
 *)
 
+open System
+Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
+
 #load "Types.fsx"
 #load "Common.fsx"
 #r "nuget: FSharp.Data"
@@ -68,11 +71,9 @@ open Types
 open Common
 open Common.Tiingo
 
-open System
 open Newtonsoft.Json
 open Plotly.NET
 
-Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
@@ -165,7 +166,7 @@ let earBarPlot (ticker: string) =
         |> fun xs ->
             match xs with
             | Some obs -> 
-                getReturnObs "IBM" obs
+                getReturnObs ticker obs
                 // Plot
                 |> Array.map (fun xs -> xs.Date, xs.Return)
                 |> Chart.Bar
@@ -289,7 +290,7 @@ type Sentiment =
 
 type EarningsAnnouncementReturn =
     { EarningsCall: EarningsCall
-      TiingoObs: Common.Tiingo.TiingoObs []
+      TiingoObs: Tiingo.TiingoObs []
       Sentiment: Sentiment option 
       Ear: float option }
 
@@ -318,12 +319,12 @@ let generateEar (call: EarningsCall) =
         flatDate.AddDays(-10.0), flatDate.AddDays(70.0)
            
     tiingoWindow pastThresh futureThresh call.CallId.Ticker
-    |> Option.map (fun xs -> 
+    |> Option.bind (fun xs -> 
         // For now lets set Sentiment to None
-        { EarningsCall = call
-          TiingoObs = xs
-          Sentiment = None
-          Ear = computeEar call xs })
+        Some { EarningsCall = call
+               TiingoObs = xs
+               Sentiment = None
+               Ear = computeEar call xs })
 
 let tslaCall = 
     myCalls
@@ -333,22 +334,53 @@ let tslaCall =
 tslaCall |> Option.bind (fun xs -> xs.Ear)
 
 (**
-### Compute EAR for all earnings calls
+### Async methods
 *)
 
-let calls2018, calls2019, calls2020, calls2021 = 
+module Async =
+    let ParallelThrottled xs = Async.Parallel(xs, 100)
+
+let asyncCall (call: EarningsCall) =
+    let rec loop attempt n =
+        async {
+            try
+                return generateEar call
+            with e ->
+                if attempt > 0 then
+                    do! Async.Sleep 2000 // Wait 2 seconds in case we're throttled.
+                    return! loop (attempt - 1) n
+                else return! failwithf "Failed to request '%s'. Error: %O" call.CallId.Ticker e }
+    loop 10 call 
+
+let asyncCalls (calls: EarningsCall [])= 
+    calls
+    |> Seq.map asyncCall
+    |> Async.ParallelThrottled
+    |> Async.RunSynchronously
+    |> Array.choose id
+
+let myEars = 
     myCalls
-    |> fun xs ->
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2018) ),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2019) ),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2020) ),
-        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2021) )
+    |> asyncCalls
+
+let ears2018, ears2019, ears2020, ears2021 = 
+    myEars
+    |> fun xs -> 
+        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2018)),
+        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2019)),
+        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2020)),
+        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2021))
 
 (**
 ### Download and Export to Json
 *)
 
 (***do-not-eval***)
-let AnnouncementDayReturnToJson (fileName: string) (ears: EarningsAnnouncementReturn [])  = 
+let earToJson (fileName: string) (ears: EarningsAnnouncementReturn [])  = 
     JsonConvert.SerializeObject(ears)
     |> fun json -> IO.File.WriteAllText(fileName, json)
+
+earToJson "data-cache/EarningsAnnouncementReturns2018.json" ears2018
+earToJson "data-cache/EarningsAnnouncementReturns2019.json" ears2019
+earToJson "data-cache/EarningsAnnouncementReturns2020.json" ears2020
+earToJson "data-cache/EarningsAnnouncementReturns2021.json" ears2021
