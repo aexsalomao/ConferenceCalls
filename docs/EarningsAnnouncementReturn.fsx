@@ -81,7 +81,7 @@ fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 *)
 
 /// JSON data reader
-let readJson (jsonFile: string) =
+let readEarningsCallJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<array<EarningsCall>>(json)
 
@@ -93,7 +93,7 @@ let myCalls =
     "data-cache/EarningsCall2020.json"
     "data-cache/EarningsCall2021.json"
     |]
-    |> Array.collect readJson
+    |> Array.collect readEarningsCallJson
     |> Array.sortBy (fun xs -> xs.CallId.Date)
 
 (**
@@ -151,10 +151,9 @@ let getReturnObs (ticker: string) (obs: TiingoObs []) =
     obs
     |> Seq.pairwise
     |> Seq.map (fun (yesterday, today) -> 
-        let rets = calcReturn (float yesterday.AdjClose) (float today.AdjClose)
         { Symbol = ticker
           Date = today.Date
-          Return = rets})
+          Return = calcReturn (float yesterday.AdjClose) (float today.AdjClose) })
     |> Seq.toArray
 
 let earBarPlot (ticker: string) = 
@@ -175,10 +174,14 @@ let earBarPlot (ticker: string) =
                 |> Some
             | None -> None)
 
-earBarPlot "IBM" |> Option.map Chart.Show
-earBarPlot "MSFT" |> Option.map Chart.Show
-earBarPlot "TSLA" |> Option.map Chart.Show
-        
+let msftEarPlot = earBarPlot "MSFT"
+
+(*** do-not-eval ***)
+msftEarPlot |> Option.map Chart.Show
+(*** hide ***)
+msftEarPlot |> Option.map GenericChart.toChartHTML
+(*** include-it-raw ***)
+
 (**
 ### Earnings Announcement Return
 *)
@@ -255,7 +258,7 @@ let spyReturnsBetween (begWin: DateTime) (endWin: DateTime) =
 *)
 
 /// Abnormal returns from three day window
-let adjustedReturns (stock : ReturnObs []) = 
+let computeAdjReturns (stock : ReturnObs []) = 
     let begWin, endWin = 
         stock
         |> Seq.sortBy (fun xs -> xs.Date)
@@ -305,26 +308,31 @@ let firstReturnAfterCall (call: EarningsCall) (returnObs: ReturnObs []) =
         |> Seq.tryFind (fun xs -> xs.Date.Date >= dateOfCall.Date)
 
 let computeEar (call: EarningsCall) (tiingoObs: Tiingo.TiingoObs []) = 
-    let longRetWindow = getReturnObs call.CallId.Ticker tiingoObs      
+
+    let getAdjReturns middleObs returnObs = 
+        match findThreeDays middleObs returnObs with
+        | Some threeDayWindow -> Some (computeAdjReturns threeDayWindow)
+        | None -> None
     
-    firstReturnAfterCall call longRetWindow
-    |> Option.bind (fun middleObs -> 
-        match findThreeDays middleObs longRetWindow with
-        | Some threeDayWindow -> Some (adjustedReturns threeDayWindow)
-        | None -> None)
+    getReturnObs call.CallId.Ticker tiingoObs
+    |> fun retObs ->
+        firstReturnAfterCall call retObs
+        |> Option.bind (fun middleObs -> 
+            getAdjReturns middleObs retObs)
 
 let generateEar (call: EarningsCall) = 
-    let pastThresh, futureThresh = 
+    let tiingoWindow = 
         let flatDate = call.CallId.Date.Date
-        flatDate.AddDays(-10.0), flatDate.AddDays(70.0)
-           
-    tiingoWindow pastThresh futureThresh call.CallId.Ticker
-    |> Option.bind (fun xs -> 
+        tiingoWindow (flatDate.AddDays(-10.0)) (flatDate.AddDays(70.0)) call.CallId.Ticker
+
+    match tiingoWindow with
+    | Some tiingoObs -> 
         // For now lets set Sentiment to None
         Some { EarningsCall = call
-               TiingoObs = xs
+               TiingoObs = tiingoObs
                Sentiment = None
-               Ear = computeEar call xs })
+               Ear = computeEar call tiingoObs}
+    | None -> None
 
 let tslaCall = 
     myCalls
@@ -352,24 +360,43 @@ let asyncCall (call: EarningsCall) =
                 else return! failwithf "Failed to request '%s'. Error: %O" call.CallId.Ticker e }
     loop 10 call 
 
-let asyncCalls (calls: EarningsCall [])= 
+let asyncCalls (calls: EarningsCall []) = 
     calls
     |> Seq.map asyncCall
     |> Async.ParallelThrottled
     |> Async.RunSynchronously
     |> Array.choose id
 
-let myEars = 
+(***do-not-eval***)
+let getEarsByYear year = 
     myCalls
+    |> Array.filter (fun xs -> xs.CallId.Date.Year = year)
     |> asyncCalls
 
-let ears2018, ears2019, ears2020, ears2021 = 
-    myEars
+let ears2018 = getEarsByYear 2018
+let ears2019 = getEarsByYear 2019
+let ears2020 = getEarsByYear 2020
+let ears2021 = getEarsByYear 2021
+
+let calls2018, calls2019, calls2020, calls2021 = 
+    myCalls
     |> fun xs -> 
-        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2018)),
-        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2019)),
-        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2020)),
-        (xs |> Array.filter (fun xs -> xs.EarningsCall.CallId.Date.Year = 2021))
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2018)),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2019)),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2020)),
+        (xs |> Array.filter (fun xs -> xs.CallId.Date.Year = 2021))
+
+calls2018.Length
+ears2018.Length
+
+calls2019.Length
+ears2019.Length
+
+calls2020.Length
+ears2020.Length
+
+calls2021.Length
+ears2021.Length
 
 (**
 ### Download and Export to Json
@@ -380,7 +407,7 @@ let earToJson (fileName: string) (ears: EarningsAnnouncementReturn [])  =
     JsonConvert.SerializeObject(ears)
     |> fun json -> IO.File.WriteAllText(fileName, json)
 
-earToJson "data-cache/EarningsAnnouncementReturns2018.json" ears2018
-earToJson "data-cache/EarningsAnnouncementReturns2019.json" ears2019
-earToJson "data-cache/EarningsAnnouncementReturns2020.json" ears2020
-earToJson "data-cache/EarningsAnnouncementReturns2021.json" ears2021
+earToJson "data-cache/EarningsAnnouncementReturn2018.json" ears2018
+earToJson "data-cache/EarningsAnnouncementReturn2019.json" ears2019
+earToJson "data-cache/EarningsAnnouncementReturn2020.json" ears2020
+earToJson "data-cache/EarningsAnnouncementReturn2021.json" ears2021

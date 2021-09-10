@@ -3,7 +3,7 @@
 title: Classifying earnings call transcripts with Naive Bayes
 category: Scripts
 categoryindex: 3
-index: 2
+index: 3
 ---
 *)
 
@@ -17,18 +17,8 @@ the EAR of each respective company around its earnings call in `EarningsAnnounce
 We can now use the EAR of each call as a *proxy* that is meant to measure the market's 
 overall sentiment towards a given earnings call.
 
-More specifically, we'll place company transcripts into buckets according to some 
-pre-specified excess cumulative return threshold:
-
-- The market sentiment of each transcript can be modeled as a discriminated union, 
-call it `MktSentiment`, with three cases: `Positive`, `Negative`, and `Neutral`. 
-
-- In machine learning lingo, by labelling each transcript according to some threshold,
-we'll be transforming our variable of interest from numeric to categorical. 
-In other words, we'll be transforming a regression problem into a classification problem.
-
 There are many machine learning algorithms to choose from when trying to solve a binary or multi-classification problem.
-Due to its simplicity and intuitive framework, a Naive Bayes[] classifier is often a good place to start.
+Due to its simplicity and intuitive framework, a Naive Bayes classifier is often a good place to start.
 *)
 
 (**
@@ -40,14 +30,16 @@ Due to its simplicity and intuitive framework, a Naive Bayes[] classifier is oft
 #r "nuget: Newtonsoft.Json"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
+#load "Types.fsx"
+
 open System
 open System.Text.RegularExpressions
 open FSharp.Collections.ParallelSeq
+open Types
 
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
-open FSharp.Data
 open Newtonsoft.Json
 open Plotly.NET
 open FSharp.Stats
@@ -56,27 +48,85 @@ open FSharp.Stats
 ## Read transcripts from json file
 *)
 
-type Transcript = 
-    { Ticker : string
-      Exchange: string
-      Date : DateTime
-      Paragraphs : string []}
-
-type AnnouncementDayReturn = 
-    { Transcript : Transcript
-      CumulativeReturn : float }
-
-let readJson (jsonFile: string) =
+let readEarJson (jsonFile: string) =
     IO.File.ReadAllText(jsonFile)
-    |> fun json -> JsonConvert.DeserializeObject<seq<AnnouncementDayReturn>>(json)
+    |> fun json -> JsonConvert.DeserializeObject<array<EarningsAnnouncementReturn>>(json)
 
-let fullRawSample = 
-    readJson ("data-cache/ReturnsAroundEarningsFullSample.json")
-    |> Seq.toArray
+let myEars = 
+    [|
+    "data-cache/EarningsAnnouncementReturn2018.json"
+    "data-cache/EarningsAnnouncementReturn2019.json"
+    "data-cache/EarningsAnnouncementReturn2020.json"
+    "data-cache/EarningsAnnouncementReturn2021.json"
+    |]
+    |> Array.collect readEarJson
+    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
 
+myEars.Length
 
 (**
-## Removing noise from feature set
+### Data visualization: Earnings Announcement Returns
+*)
+
+let earsHist (ears: float [])= 
+    let thresh = 0.05
+    let negThresh ret = ret <= -thresh
+    let neuThresh ret = abs ret < thresh
+    let posThresh ret = ret >= thresh
+
+    let histObs thresh name = 
+        ears 
+        |> Array.filter thresh
+        |> fun filteredEars ->
+            let pct = 
+                float filteredEars.Length/ float ears.Length 
+                |> fun xs -> Math.Round(xs * 100., 2)
+            filteredEars
+            |> Chart.Histogram
+            |> Chart.withTraceName ($"{name} ({pct}%%)")
+    [|
+    histObs negThresh "Negative"
+    histObs neuThresh "Neutral"
+    histObs posThresh "Positive"
+    |]
+    |> Chart.Combine
+    |> Chart.withTitle ("Earnings Announcement Returns (EAR)")
+    |> Chart.withX_AxisStyle ("EAR")
+    |> Chart.withY_AxisStyle ("Count")
+    |> Chart.withSize (1000., 500.)
+
+let earsToPlot = 
+    myEars
+    |> Array.choose (fun xs -> xs.Ear)
+    // Remove outliers ...
+    |> Array.filter (fun xs -> abs xs < 0.5)
+
+(*** do-not-eval ***)
+earsHist earsToPlot |> Chart.Show 
+(*** hide ***)
+earsHist earsToPlot |> GenericChart.toChartHTML
+(*** include-it-raw ***)
+
+(**
+## Preprocessing Text
+*)
+
+(**
+Before jumping into any sort of text mining technique or analytics, we must first 
+transform our dataset of earnings calls.
+
+Basic steps:
+1. Choose the scope of text to be processed
+2. Tokenize
+3. Remove stop words
+4. Stem
+5. Normalize spelling
+6. Detect sentence boundaries
+7. Normalize case
+*)
+
+(**
+### Scope of text
 *)
 
 (**
@@ -89,9 +139,9 @@ Since we want to eliminate short paragraphs, we will filter them out by their ch
 
 /// Filter paragraphs by character count
 let shortParagraphs = 
-    fullRawSample
+    myEars
     |> Array.collect (fun xs -> 
-        xs.Transcript.Paragraphs 
+        xs.EarningsCall.Transcript
         |> Array.filter (fun paragraph -> paragraph.Length < 100))
 
 shortParagraphs
@@ -100,7 +150,7 @@ shortParagraphs
 (*** include-output***)
 
 (**
-## Labelling transcripts: Market sentiment
+### Preprocessing paragraphs
 *)
 
 #load "TextPreprocessing.fsx"
@@ -108,443 +158,243 @@ open Preprocessing.Normalization
 open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
-type Label = 
-    | Positive
-    | Negative
-    | Neutral
+let preprocessParagraph (paragraph: string) = 
+        paragraph
+        |> splitParagraph
+        |> Array.collect (fun phrase ->
+            phrase
+            |> getOnlyWords
+            |> expandContractions
+            // Tokenize
+            |> nGrams 1
+            // Stop words removal
+            |> Array.choose removeStopWords
+            // Empty string removal
+            |> Array.filter (fun xs -> xs.Length <> 0))
 
-/// Label from cumulative return
-let labelFromRet cumRet thresh = 
-    if cumRet > thresh then Positive
-    elif cumRet < -thresh then Negative
-    elif abs cumRet <= abs thresh then Neutral
+let sample = 
+    [|
+    "Elon Musk -- Chief Executive Officer"
+    
+    "Sure. So to recap, Q2 2021 was a record quarter on many levels. 
+    We achieved record production, deliveries, and surpassed over $1 billion 
+    in GAAP net income for the first time in Tesla's history. I'd really like 
+    to congratulate everyone in Tesla for the amazing job."
+
+    "This is really an incredible milestone. It also seems that public sentiment 
+    toward EVs is at an inflection point. And at this point, I think almost everyone 
+    agrees that electric vehicles are the only way forward. Regarding supply chain, 
+    while we're making cars at full speed, the global chip shortage situation remains 
+    quite serious."
+    |]
+
+sample
+|> Array.collect preprocessParagraph
+// Bag-of-words representation
+|> Array.countBy id
+
+(**
+### Splitting Data: Train and Test sets
+*)
+
+let labelSentiment earVal thresh = 
+    if earVal >= thresh then Positive
+    elif earVal <= -thresh then Negative
     else Neutral
 
-type LabeledTranscript = 
-    { TickerExchange: (string * string) 
-      EarningsCall: string
-      CumulativeReturn: float} with 
-      member this.Label = 
-        // Label
-        labelFromRet this.CumulativeReturn 0.1
-
-let preprocessText (text: string) = 
-    // Normalization
-    text
-    |> getOnlyWords
-    |> expandContractions
-    // Tokenization
-    |> nGrams 1
-    // Stop words removal
-    |> Seq.choose removeStopWords
-
-let labelDataset (dataset: AnnouncementDayReturn []): LabeledTranscript [] = 
-    
-    dataset 
-    |> Array.map (fun xs -> 
-        let tickerExchange = xs.Transcript.Ticker, xs.Transcript.Exchange
-        
-        let earningsCall = 
-            xs.Transcript.Paragraphs
-            |> Seq.filter (fun p -> p.Length > 100) // Keep long paragraphs
-            |> Seq.skip 1 // Usually another (longer) opening statement from the "Operator"
-            |> Seq.collect preprocessText
-            |> String.concat (" ")
-
-        { TickerExchange = tickerExchange
-          EarningsCall = earningsCall
-          CumulativeReturn = xs.CumulativeReturn })
-
-let allTranscripts = labelDataset fullRawSample
-
-(**
-Export to Json 
-*)
-
-let LabeledTranscriptToJson (fileName: string) (transcripts: LabeledTranscript [])  = 
-    JsonConvert.SerializeObject(transcripts)
-    |> fun json -> IO.File.WriteAllText(fileName, json)
-
-let randTranscripts = 
-    let rnd = System.Random()
-    fullRawSample
+let trainValid cutoffPct ears = 
+    let rnd = System.Random(42)
+    ears
     |> Seq.sortBy (fun _ -> rnd.Next())
-    |> Seq.take 5000
     |> Seq.toArray
+    |> fun xs -> 
+        let cutoff = float xs.Length * cutoffPct
+        xs.[.. int cutoff], xs.[int cutoff + 1 ..]
+
+let generateFeatureAndLabel (thresh: float) (ear: EarningsAnnouncementReturn) = 
+    match ear.Ear with
+    | Some earVal -> 
+        let processedText = 
+            ear.EarningsCall.Transcript
+            // Keep only long paragraphs (remove opening remarks)
+            |> Array.filter (fun xs -> xs.Length > 100)
+            // Text-preprocessing
+            |> Array.Parallel.collect preprocessParagraph
+            |> Array.countBy id
+
+        Some (labelSentiment earVal thresh, 
+              processedText)
+    | None -> None
+
+let earAboveThresh thresh ear = 
+    ear.Ear
+    |> function
+    | Some earVal when abs earVal >= thresh -> Some ear
+    | _ -> None
 
 (**
-## Histogram: Excess cumulative returns
+Splitting Data: Train and Test
 *)
 
-/// Build cumulative return histogram
-let returnsHist (transcripts: LabeledTranscript []) = 
-    let makeChartFromLabel label = 
-        let rets = 
-            transcripts
-            |> Seq.filter (fun xs -> xs.Label = label)
-            |> Seq.map (fun xs -> xs.CumulativeReturn)
-            |> Seq.toArray
-        
-        let legendData = 
-            let count = rets.Length 
-            let avgRet = Array.average rets
-            let stDevRet = stDev rets
-            $"{label} (N = {count}, Avg. = {Math.Round(avgRet, 4)}, Std. = {Math.Round(stDevRet, 4)})"
+let train, test = 
+    let thresh = 0.05
+    let significantEars, generateData, splitData = 
+        earAboveThresh thresh, 
+        generateFeatureAndLabel thresh,
+        trainValid 0.9
 
-        Chart.Histogram (rets |> Array.filter (fun x -> abs x <= 0.5), Name=legendData)
+    myEars
+    |> Seq.choose significantEars
+    |> Seq.choose generateData
+    |> splitData
 
-    transcripts
-    |> Seq.map (fun xs -> xs.Label)
-    |> Seq.distinct
-    |> Seq.map makeChartFromLabel
-    |> Seq.toArray
-    |> Chart.Combine
-    |> Chart.withTitle "Excess cumulative returns"
-    |> Chart.withSize (1250., 750.)
-
-returnsHist allTranscripts |> GenericChart.toChartHTML
-(***include-it-raw***)
+train.Length
+test.Length
 
 (**
-## Naive Bayes Module
-
-- [Source: Mathias Brandewinder (Github)](https://github.com/mathias-brandewinder/machine-learning-projects-for-dot-net-developers/tree/master/chapter-2/SpamOrHam) 
+### Naive Bayes: Bag of words approach
 *)
 
+(**
+### Types
+*)
+
+type Label = Sentiment
+type Prior = float
 type Token = string
-type Tokenizer = string -> Token Set
-type TokenizedDoc = Token Set
+type Count = int
+type Likelihood = float
 
-type DocGroup = 
-    { Proportion : float
-      TokenFrequencies : Map<Token, float> }
+type TokenCount = Token * Count
+type BagOfWords = TokenCount []
 
-/// Scoring a document
-let tokenScore (group: DocGroup) (token: Token) =
-    if group.TokenFrequencies.ContainsKey token
-    then log group.TokenFrequencies.[token]
-    else 0.0
+type TokenScore = float
+type DocScore = float
 
-let score (document: TokenizedDoc) (group: DocGroup) = 
-    let scoreToken = tokenScore group
-    log group.Proportion + 
-    (document |> Seq.sumBy scoreToken)
-
-/// Predicting a label of a document
-let classify (labelGroups: ('Label * DocGroup)[])
-             (tokenizer: Tokenizer)
-             (txt: string) = 
-    let tokenized = tokenizer txt
-    labelGroups
-    |> Array.maxBy (fun (label, group) -> 
-        score tokenized group)
-    |> fst
-
-let proportion count total = float count / float total
-
-/// Laplace smoothing -> Handling the problem of "zero probability"
-let laplace count total = float (count+1) / float (total+1)
-
-let countIn (docs: TokenizedDoc seq) (token: Token) =
-    docs
-    |> Seq.filter (Set.contains token)
-    |> Seq.length
-
-/// Analyzing a group of documents
-let analyze (docsThisLabel: TokenizedDoc seq)
-            (nTotalDocs: int)
-            (vocabulary: Token Set) =
-    let nThisLabel = docsThisLabel |> Seq.length
-    let score token =
-        let count = countIn docsThisLabel token
-        laplace count nThisLabel
-    let scoredTokens =
-        vocabulary
-        |> Set.map (fun token -> token, score token)
-        |> Map.ofSeq
-    let labelProportion = proportion nThisLabel nTotalDocs
-
-    { Proportion = labelProportion 
-      TokenFrequencies = scoredTokens }
-
-/// Learning from documents
-let learn (docs: ('Label * string)[])
-          (tokenizer: Tokenizer)
-          (vocabulary: Token Set) =
-    let total = docs.Length
-    docs
-    |> PSeq.map (fun (label, docString) -> label, tokenizer docString)
-    |> PSeq.groupBy fst
-    |> PSeq.map (fun (label, (xs: seq<'Label * TokenizedDoc>)) -> 
-        let tokenizedDocs = xs |> Seq.map snd
-        label, analyze tokenizedDocs total vocabulary)
-    |> PSeq.toArray
-
-let train (docs: ('Label * string)[]) 
-          (tokenizer: Tokenizer)
-          (vocabulary: Token Set) =
-    let labelGroups = learn docs tokenizer vocabulary
-    let classifier = classify labelGroups tokenizer
-    classifier
 
 (**
-## Training and evaluation sets
+### Priors
 *)
 
-let training, validation =
-    let posOrNeg = 
-        allTranscripts
-        |> Seq.filter (fun xs -> xs.Label <> Neutral)
-        |> Seq.map (fun xs -> (xs.Label, xs.EarningsCall))
+let labelPriors: Map<Label, Prior>= 
+    let n = train.Length
+    train
+    |> Array.groupBy fst
+    |> Array.map (fun (label, labelsFreqs) -> 
+        let labelPrior =  (float labelsFreqs.Length)/(float n)
+        label, labelPrior)
+    |> Map
+
+labelPriors
+
+(**
+### Bag-of-Words by Label, Token counts
+*)
+
+let bowByLabel: Map<Label, BagOfWords> = 
+    let tokenCounts (xs: (Label * (TokenCount) array) array) = 
+        xs 
+        |> Seq.collect snd
+        |> Seq.groupBy fst
+        |> Seq.map (fun (token, tokenCount) -> 
+            let totalCount = tokenCount |> Seq.sumBy snd
+            token, totalCount)
         |> Seq.toArray
 
-    let cutoff = (float posOrNeg.Length) * 0.8
-    
-    posOrNeg.[.. int cutoff], posOrNeg.[int cutoff + 1 ..]
+    train
+    |> Array.groupBy fst
+    |> Array.map (fun (label, xs) -> 
+        label, tokenCounts xs)
+    |> Map
 
-training.Length
-validation.Length
+let tokenCountsByLabel: Map<Label, Count>= 
+    let computeTotalCounts label = 
+        label, 
+        bowByLabel.[label] |> Seq.sumBy snd
 
-(**
-## Text processing: tokenization
-*)
-
-(**
-**Tokenization** is a step which splits longer strings of text into smaller
-pieces, or **tokens**. Large chunks of text can be tokenized into sentences,
-sentences can be tokenized into words, etc.
-
-Such tokens are then used to compute a documents score as seen in the `score` function ...
-*)
-
-let vocabulary (tokenizer: Tokenizer) (corpus: string seq) = 
-    corpus
-    |> Seq.map tokenizer
-    |> Set.unionMany
-
-let onlyWords = Regex(@"(?<!\S)[a-zA-Z0-9]\S*[a-zA-Z0-9](?!\S)")
-
-let tokenizeAllWords (text: string) = 
-    text
-    |> onlyWords.Matches
-    |> Seq.cast<Match>
-    |> Seq.map (fun m -> m.Value)
-    |> Set.ofSeq
-
-let applyTokenizer (tokenizer: Tokenizer) =
-    training
-    |> Seq.map snd
-    |> vocabulary tokenizer
-
-(**
-## Evaluate performance by tokenizer
-*)
-
-let evaluate (tokenizer: Tokenizer) (tokens: Token Set) = 
-    let classifier = train training tokenizer tokens
-    validation
-    |> Seq.averageBy (fun (label, text) -> 
-        if label = classifier text then 1.0 
-        else 0.)
-    |> printfn "Correctly classified: %.4f"
-
-(**
-## Feature engineering: N-Grams
-*)
-
-(**
-The most common tokenization process is whitespace/unigram tokenization. In this process, 
-the entire text is split into words by splitting them from whitespaces.
-
-N-Grams -> Tokenization of adjacent words 
-
-For example:
-- Text: "The quick brown fox jumps"
-- 2-Grams tokens: {"The quick", "quick brown", "brown fox", "fox jumps"}
-
-- N-Grams advantage is that they are easy to generate, and they require no 
-linguistic knowledge or complex parsing algorithm.
-
-- The main disadvantage of n-grams is that they greatly increase the size of 
-the feature set (see [curse of dimensionality](https://towardsdatascience.com/the-curse-of-dimensionality-50dc6e49aa1e)).
-The number of features generated can quickly get out of hand, and many of them
-will be very rare, occuring only once in the corpus.
-*)
-
-(**
-## Term Frequency (TF)
-*)
-
-(**
-Term *frequency* measures how prevalent a term is in a single document.
-
-- $tf_{t,d} = \frac{n_{t,d}}{number of terms in a document}$
-
-- $n_{t,d}$: number of times a term *t* is present in a document *d*.
-
-It is document specific and does not take into account other documents of the corpus.
-But how common it is in the entire corpus we're mining?
-
-- A term should not neither be too *rare* or too *common*!
-*)
-
-(**
-## Inverse document frequency (IDF)
-*Inverse* document frequency measures the sparseness of a given term *t*. 
-It is **not** document specific, and takes into account information present from the entire corpus.
-
-- $IDF (t) = log(\frac{\text{Total number of documents}}{\text{Number of documents containing *t*}})$
-*)
-
-(**
-## Term frequency - Inverse Document Frequency
-$TF-IDF(t, d) = TF(t, d) * IDF(t)$
-
-- A high weight in tf–idf is reached by a high term frequency (in the given document) and a 
-low document frequency of the term in the whole collection of documents; the weights hence tend 
-to filter out common terms. TF-IDF value is specific to a single document (d) whereas IDF 
-depends on the entire corpus.
-
-- Very rare words do convey meaning, but their added computational cost in expanding 
-the set of features that must be considered often exceeds their diagnostic value.
-An approach that excludes both common and rare words and has proven very useful in practice 
-is filtering by 'term frequency - inverse document frequency' (tf-idf).
-A high weight in tf-idf is reached by a high term frequency (in the given document) and 
-a low document frequency of the term in the whole collection of documents; 
-the weights hence tend to filter out common terms."
-*)
-
-(**
-## Tf-Idf tests
-*)
-
-// Test docs
-let doc1 = snd training.[0]
-let allDocs = training |> Array.map snd |> Seq.toArray
-
-/// Tests
-let twoGrams = nGrams 2 // DocTransformer
-let tfDoc1 = tf twoGrams doc1 // Tf test
-let idfTwoGrams = idf twoGrams allDocs // Idf test
-let tfIdfDoc1 = tfIdf twoGrams idfTwoGrams doc1 // TfIdf test
-
-(**
-# Word bar chart - Doc1
-*)
-
-let wordBarChart (words : TermStat []) (title: string) = 
-    words
-    |> Seq.map (fun xs -> 
-        match xs.Term, xs.Stat with 
-        | term, TermFreqInvDocFreq tfIdf when tfIdf > 0.-> 
-            Some(term, tfIdf)
-        | _ -> None)
-    |> Seq.choose id
-    |> Seq.toArray
-    |> Chart.Column
-    |> Chart.withTitle title
-    |> Chart.withSize (1250., 500.)
-
-let lowTfIdfChart = 
-    tfIdfDoc1
-    |> Seq.sortBy (fun xs -> xs.Stat)
-    |> Seq.distinctBy (fun xs -> xs.Stat)
-    |> Seq.take 25
-    |> Seq.toArray
-    |> fun xs -> wordBarChart xs "Low Tf-Idf words (Common words)"
-(***do-not-eval***)
-lowTfIdfChart |> Chart.Show
-
-(***hide***)
-lowTfIdfChart |> GenericChart.toChartHTML
-(***include-it-raw***)
-
-let highTfIdfChart = 
-    tfIdfDoc1
-    |> Seq.sortByDescending (fun xs -> xs.Stat)
-    |> Seq.distinctBy (fun xs -> xs.Stat)
-    |> Seq.take 25
-    |> Seq.rev
-    |> Seq.toArray
-    |> fun xs -> wordBarChart xs "High Tf-Idf words (Relevant words)"
-(***do-not-eval***)
-
-(**
-# Tf-idf histogram
-*)
-
-/// TwoGrams
-let allDocsTwoGramsTfIdf = 
-    allDocs
-    |> Array.collect (fun doc -> tfIdf twoGrams idfTwoGrams doc)
-
-let tfIdfHistogram (terms: TermStat [])
-                   (description: ChartDescription)
-                   (title: string) =
-    terms
-    |> Seq.map (fun xs -> 
-        match xs.Stat with
-        | TermFreqInvDocFreq tfIdf -> Some tfIdf
-        | _ -> None)
-    |> Seq.choose id
-    // For vizualization purposes
-    |> Seq.filter (fun x -> x < 0.005)
-    |> Seq.toArray
-    |> Chart.Histogram
-    |> Chart.withTitle title
-    |> Chart.withX_AxisStyle "Term frequency - inverse document frequency"
-    |> Chart.withY_AxisStyle "Frequency"
-    |> Chart.WithDescription (description)
-    |> Chart.withSize (600., 600.)
-
-let twoGramsHist = tfIdfHistogram allDocsTwoGramsTfIdf description "2-Grams"
-
-/// Chart.Show twoGramsHist
-
-/// twoGramsHist |> Chart.SaveHtmlAs "data-cache/2GramsHist"
-
-(**
-# Tf-Idf + NGrams Tokenizer
-*)
-
-let tfIdfNGramsTokenizer (docTransformer: DocTransfromer) 
-                         (inverseDocFreq: Map<string, TermStat>)
-                         (tfIdfThresh : float) 
-                         (doc: string)= 
-    let tdIdfofDoc = 
-        tfIdf docTransformer inverseDocFreq doc
-        |> Seq.map (fun xs -> xs.Term, xs)
-        |> Map
-    
-    let relevantTerm term = 
-        tdIdfofDoc.TryFind term
-        |> Option.bind (fun term -> 
-            match term.Stat with
-            | TermFreqInvDocFreq tfIdf when tfIdf > tfIdfThresh -> Some term.Term
-            | _ -> None )
-        
-    doc
-    |> docTransformer
+    train
+    |> Seq.map fst
     |> Seq.distinct
-    |> Seq.choose relevantTerm
-    |> Set
+    |> Seq.map computeTotalCounts
+    |> Map
 
 (**
-# Tokenizer evaluation
-## Simple Tokenizer (Regex single word)
+### Token Likelihoods by Label
 *)
 
-let allTokens = applyTokenizer tokenizeAllWords
-evaluate tokenizeAllWords allTokens
+let labels: Label [] = 
+    train
+    |> Seq.distinctBy fst
+    |> Seq.map fst
+    |> Seq.toArray
+
+let computeLikelihoods (tokenCounts: TokenCount []): (Token * Likelihood) [] = 
+    let totalCount = 
+        tokenCounts 
+        |> Seq.sumBy snd
+    tokenCounts
+    |> Seq.map (fun (token, freq) -> 
+        let tokenLikihood = (float freq / float totalCount)
+        token, tokenLikihood)
+    |> Seq.toArray
+
+let likelihood (label: Label): Label * Map<Token, Likelihood> =
+    bowByLabel.[label]
+    |> computeLikelihoods
+    |> Map
+    |> fun xs -> label, xs
+
+let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> = 
+    labels
+    |> Seq.map likelihood
+    |> Seq.toArray
+    |> Map
 
 (**
-### Tf-Idf + NGrams Tokenizer
+### Token score
 *)
 
-/// Evaluate TfIdf + twoGrams Tokenizer 
-let twoGramsTransformer = nGrams 2
-let trainingTwoGramsIdf = idf twoGramsTransformer allDocs
-let tfIdfTwoGramsTokenzier = tfIdfNGramsTokenizer twoGramsTransformer trainingTwoGramsIdf 0.07
+let tokenScore (likelihoods: Map<Token, Likelihood>) 
+               (totalCount: Count)
+               (tokenCount: Token * Count): TokenScore = 
 
-let tfIdfTwoGramsTokens = applyTokenizer tfIdfTwoGramsTokenzier
-evaluate tfIdfTwoGramsTokenzier tfIdfTwoGramsTokens
+    match likelihoods.TryFind(fst tokenCount) with
+    | Some l -> 
+        l ** float (snd tokenCount)
+        |> log 
+    | None -> 
+        (1./float totalCount) ** float (snd tokenCount)
+        |> log
+
+let scoreTokenByLabel label = 
+    tokenScore likelihoodsByLabel.[label] tokenCountsByLabel.[label]
+
+(**
+### Scoring Bag-of-Words
+*)
+
+let scoreBowByLabel (bow: BagOfWords) (label: Label): Label * DocScore = 
+    bow
+    |> Seq.map (scoreTokenByLabel label)
+    |> Seq.fold (+) (log labelPriors.[label])
+    |> fun score -> label, score
+
+let classifyBow (bow: BagOfWords): Label = 
+    let bowToScore = scoreBowByLabel bow
+    labels
+    |> Seq.map bowToScore
+    |> Seq.maxBy snd
+    |> fst
+
+(**
+### Evaluate
+*)
+
+let evaluate (labelledBoW: (Label * BagOfWords)[]): float =
+    labelledBoW
+    |> Seq.averageBy (fun (target, bow) ->  
+        if classifyBow bow = target then 1. 
+        else 0.)
+
+evaluate (train |> Array.take 10000)
+evaluate test

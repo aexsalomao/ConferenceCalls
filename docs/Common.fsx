@@ -47,7 +47,7 @@ module Tiingo =
         /// <param name="endOn">Request start date</param>
         /// <param name="request">The Tiingo request to update.</param>
     let endOn endOn request = { request with End = endOn }
-
+    
     let private cache = Runtime.Caching.createInMemoryCache (TimeSpan(hours=12,minutes=0,seconds=0))
 
     ///<summary>Downloads Tiingo data.</summary>

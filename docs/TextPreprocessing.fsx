@@ -4,6 +4,15 @@ module Normalization =
 
     open System.Text.RegularExpressions
 
+    // Detect sentence boundaries
+    let splitParagraph (paragraph: string) = 
+        paragraph.Replace(".", "XXXX")
+                 .Replace("?", "XXXX")
+                 .Replace("!", "XXXX")
+                 .Split("XXXX") 
+        |> Array.map (fun xs -> xs.Replace("XXXX", "").Trim())
+        |> Array.filter (fun xs -> xs.Length <> 0)
+
     /// Check for *only* words (Regex)       
     let getOnlyWords (text: string): string= 
         let onlyWords = Regex(@"(?<!\S)[a-zA-Z]\S*[a-zA-Z](?!\S)")
@@ -11,9 +20,7 @@ module Normalization =
         text.Replace(",", "")
             .Replace(";", "")
             .Replace(":", "")
-            .Replace(".", "")
-            .Replace("?", "")
-            .Replace("!", "")
+            .Trim()
             .ToLowerInvariant()
         |> onlyWords.Matches
         |> Seq.cast<Match>
@@ -307,12 +314,12 @@ module NltkData =
         let remaining = 
             textItem.Split(" ")
             |> Array.filter (fun word -> not (stopWords.Contains word))
-        if Array.isEmpty remaining then None else Some remaining
+        if Array.isEmpty remaining then None else Some (remaining |> String.concat(" "))
 
 module TermFrequencies = 
 
     type DocTransfromer = string -> string []
-
+    
     /// Term-frequencies
     type TermFreq = {Term: string; Tf: float } 
 

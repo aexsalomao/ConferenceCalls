@@ -28,3 +28,5 @@ type EarningsAnnouncementReturn =
       TiingoObs: Common.Tiingo.TiingoObs []
       Sentiment: Sentiment option 
       Ear: float option }
+
+/// ClassifyingEarningsCalls
