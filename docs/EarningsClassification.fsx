@@ -1,6 +1,6 @@
 (**
 ---
-title: Classifying earnings call transcripts with Naive Bayes
+title: Classifying Earnings Calls with Naive Bayes
 category: Scripts
 categoryindex: 3
 index: 3
@@ -8,22 +8,30 @@ index: 3
 *)
 
 (**
-# Classifying earnings call transcripts with Naive Bayes
+# Classifying Earnings Calls with Naive Bayes
 *)
 
 (**
 After dowloading earnings transcripts from Motley Fool, we proceeded to compute 
-the EAR of each respective company around its earnings call in `EarningsAnnouncementReturn.fsx`. 
-We can now use the EAR of each call as a *proxy* that is meant to measure the market's 
-overall sentiment towards a given earnings call.
+the Earnings Announcement Return (EAR) of each company's earnings announcement 
+in `EarningsAnnouncementReturn.fsx`. 
 
-There are many machine learning algorithms to choose from when trying to solve a binary or multi-classification problem.
-Due to its simplicity and intuitive framework, a Naive Bayes classifier is often a good place to start.
+We can use EAR of each call as a *proxy* that is meant to measure the market's 
+overall sentiment towards a given earnings call. While a high EAR would indicate 
+that the overall market's sentiment was positive, a low EAR would 
+indicate precicely the opposite. 
+
+There are many machine learning algorithms to choose from when trying to solve 
+a binary or multi-classification problem. Due to its simplicity and intuitive framework, 
+a Naive Bayes classifier is often a good place to start.
 *)
 
 (**
 ## Import packages and load scripts
 *)
+
+open System
+Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 
 #r "nuget: FSharp.Collections.ParallelSeq"
 #r "nuget: FSharp.Stats"
@@ -32,51 +40,46 @@ Due to its simplicity and intuitive framework, a Naive Bayes classifier is often
 
 #load "Types.fsx"
 
-open System
 open System.Text.RegularExpressions
 open FSharp.Collections.ParallelSeq
 open Types
-
-Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
-fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
-
 open Newtonsoft.Json
 open Plotly.NET
 open FSharp.Stats
+
+fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
 ## Read transcripts from json file
 *)
 
-let readEarJson (jsonFile: string) =
+let readEarJson (jsonFile : string) =
     IO.File.ReadAllText(jsonFile)
     |> fun json -> JsonConvert.DeserializeObject<array<EarningsAnnouncementReturn>>(json)
 
 let myEars = 
-    [|
-    "data-cache/EarningsAnnouncementReturn2018.json"
-    "data-cache/EarningsAnnouncementReturn2019.json"
-    "data-cache/EarningsAnnouncementReturn2020.json"
-    "data-cache/EarningsAnnouncementReturn2021.json"
-    |]
-    |> Array.collect readEarJson
-    |> Array.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
+    [
+        "data-cache/EarningsAnnouncementReturn2018.json"
+        "data-cache/EarningsAnnouncementReturn2019.json"
+        "data-cache/EarningsAnnouncementReturn2020.json"
+        "data-cache/EarningsAnnouncementReturn2021.json"
+    ]
+    |> Seq.collect readEarJson
+    |> Seq.sortBy (fun xs -> xs.EarningsCall.CallId.Date)
+    |> Seq.toArray
 
 myEars.Length
+(*** include-it ***)
 
 (**
 ### Data visualization: Earnings Announcement Returns
 *)
 
-let earsHist (ears: float [])= 
-    let thresh = 0.05
-    let negThresh ret = ret <= -thresh
-    let neuThresh ret = abs ret < thresh
-    let posThresh ret = ret >= thresh
+let earsHist (ears : float []) (thresh: float) = 
 
-    let histObs thresh name = 
+    let obsToPlot name threshExpr =         
         ears 
-        |> Array.filter thresh
+        |> Array.filter threshExpr
         |> fun filteredEars ->
             let pct = 
                 float filteredEars.Length/ float ears.Length 
@@ -84,11 +87,12 @@ let earsHist (ears: float [])=
             filteredEars
             |> Chart.Histogram
             |> Chart.withTraceName ($"{name} ({pct}%%)")
-    [|
-    histObs negThresh "Negative"
-    histObs neuThresh "Neutral"
-    histObs posThresh "Positive"
-    |]
+
+    [
+        obsToPlot "Negative" (fun ret -> ret <= -thresh)
+        obsToPlot "Neutral" (fun ret -> abs ret < thresh)
+        obsToPlot "Positive" (fun ret -> ret >= thresh)
+    ]
     |> Chart.Combine
     |> Chart.withTitle ("Earnings Announcement Returns (EAR)")
     |> Chart.withX_AxisStyle ("EAR")
@@ -102,9 +106,9 @@ let earsToPlot =
     |> Array.filter (fun xs -> abs xs < 0.5)
 
 (*** do-not-eval ***)
-earsHist earsToPlot |> Chart.Show 
+earsHist earsToPlot 0.05 |> Chart.Show 
 (*** hide ***)
-earsHist earsToPlot |> GenericChart.toChartHTML
+earsHist earsToPlot 0.05 |> GenericChart.toChartHTML
 (*** include-it-raw ***)
 
 (**
@@ -158,7 +162,7 @@ open Preprocessing.Normalization
 open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
-let preprocessParagraph (paragraph: string) = 
+let preprocessParagraph (paragraph : string) = 
         paragraph
         |> splitParagraph
         |> Array.collect (fun phrase ->
@@ -211,7 +215,7 @@ let trainValid cutoffPct ears =
         let cutoff = float xs.Length * cutoffPct
         xs.[.. int cutoff], xs.[int cutoff + 1 ..]
 
-let generateFeatureAndLabel (thresh: float) (ear: EarningsAnnouncementReturn) = 
+let generateFeatureAndLabel (thresh : float) (ear : EarningsAnnouncementReturn) = 
     match ear.Ear with
     | Some earVal -> 
         let processedText = 
@@ -254,23 +258,6 @@ test.Length
 (**
 ### Naive Bayes: Bag of words approach
 *)
-
-(**
-### Types
-*)
-
-type Label = Sentiment
-type Prior = float
-type Token = string
-type Count = int
-type Likelihood = float
-
-type TokenCount = Token * Count
-type BagOfWords = TokenCount []
-
-type TokenScore = float
-type DocScore = float
-
 
 (**
 ### Priors
