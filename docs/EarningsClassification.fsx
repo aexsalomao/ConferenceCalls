@@ -117,8 +117,10 @@ earsHist earsToPlot 0.05 |> GenericChart.toChartHTML
 
 (**
 Before jumping into any sort of text mining technique or analytics, we must first 
-transform our dataset of earnings calls.
+convert our unstructered dataset.
+*)
 
+(**
 Basic steps:
 1. Choose the scope of text to be processed
 2. Tokenize
@@ -154,7 +156,7 @@ shortParagraphs
 (*** include-output***)
 
 (**
-### Preprocessing paragraphs
+### Preprocessing paragraphs pipeline
 *)
 
 #load "TextPreprocessing.fsx"
@@ -163,10 +165,14 @@ open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
 let preprocessParagraph (paragraph : string) = 
+    // Scope of text
+    if paragraph.Length > 100 then
         paragraph
+        // Detect sentence boundaries
         |> splitParagraph
         |> Array.collect (fun phrase ->
             phrase
+            // Normalize
             |> getOnlyWords
             |> expandContractions
             // Tokenize
@@ -175,6 +181,8 @@ let preprocessParagraph (paragraph : string) =
             |> Array.choose removeStopWords
             // Empty string removal
             |> Array.filter (fun xs -> xs.Length <> 0))
+        |> Some
+    else None
 
 let sample = 
     [|
@@ -193,7 +201,8 @@ let sample =
     |]
 
 sample
-|> Array.collect preprocessParagraph
+|> Array.choose preprocessParagraph
+|> Array.concat
 // Bag-of-words representation
 |> Array.countBy id
 
@@ -201,12 +210,12 @@ sample
 ### Splitting Data: Train and Test sets
 *)
 
-let labelSentiment earVal thresh = 
+let makeLabel earVal thresh = 
     if earVal >= thresh then Positive
     elif earVal <= -thresh then Negative
     else Neutral
 
-let trainValid cutoffPct ears = 
+let getTrainTest cutoffPct ears = 
     let rnd = System.Random(42)
     ears
     |> Seq.sortBy (fun _ -> rnd.Next())
@@ -215,24 +224,22 @@ let trainValid cutoffPct ears =
         let cutoff = float xs.Length * cutoffPct
         xs.[.. int cutoff], xs.[int cutoff + 1 ..]
 
-let generateFeatureAndLabel (thresh : float) (ear : EarningsAnnouncementReturn) = 
+let generateFeatureAndLabel (thresh : float) (ear : EarningsAnnouncementReturn): (Label * BagOfWords) option = 
     match ear.Ear with
     | Some earVal -> 
-        let processedText = 
+        let bow = 
             ear.EarningsCall.Transcript
-            // Keep only long paragraphs (remove opening remarks)
-            |> Array.filter (fun xs -> xs.Length > 100)
             // Text-preprocessing
-            |> Array.Parallel.collect preprocessParagraph
+            |> Array.Parallel.choose preprocessParagraph
+            |> Array.concat
+            // Bag-of-words
             |> Array.countBy id
 
-        Some (labelSentiment earVal thresh, 
-              processedText)
+        Some (makeLabel earVal thresh, bow)
     | None -> None
 
-let earAboveThresh thresh ear = 
-    ear.Ear
-    |> function
+let filterByEar thresh ear = 
+    match ear.Ear with
     | Some earVal when abs earVal >= thresh -> Some ear
     | _ -> None
 
@@ -243,10 +250,13 @@ Splitting Data: Train and Test
 let train, test = 
     let thresh = 0.05
     let significantEars, generateData, splitData = 
-        earAboveThresh thresh, 
+        // Only keep obs with high abs (Ears)
+        filterByEar thresh, 
+        // Label obs and create Bag-of-Words
         generateFeatureAndLabel thresh,
-        trainValid 0.9
-
+        // Split dataset (0.9 -> Train)
+        getTrainTest 0.9
+    
     myEars
     |> Seq.choose significantEars
     |> Seq.choose generateData
@@ -256,7 +266,7 @@ train.Length
 test.Length
 
 (**
-### Naive Bayes: Bag of words approach
+### Multinomial Naive Bayes: Bag of words approach
 *)
 
 (**
@@ -279,7 +289,7 @@ labelPriors
 *)
 
 let bowByLabel: Map<Label, BagOfWords> = 
-    let tokenCounts (xs: (Label * (TokenCount) array) array) = 
+    let tokenCounts (xs : (Label * (TokenCount) array) array) = 
         xs 
         |> Seq.collect snd
         |> Seq.groupBy fst
@@ -294,17 +304,6 @@ let bowByLabel: Map<Label, BagOfWords> =
         label, tokenCounts xs)
     |> Map
 
-let tokenCountsByLabel: Map<Label, Count>= 
-    let computeTotalCounts label = 
-        label, 
-        bowByLabel.[label] |> Seq.sumBy snd
-
-    train
-    |> Seq.map fst
-    |> Seq.distinct
-    |> Seq.map computeTotalCounts
-    |> Map
-
 (**
 ### Token Likelihoods by Label
 *)
@@ -315,7 +314,7 @@ let labels: Label [] =
     |> Seq.map fst
     |> Seq.toArray
 
-let computeLikelihoods (tokenCounts: TokenCount []): (Token * Likelihood) [] = 
+let computeLikelihoods (tokenCounts : TokenCount []): (Token * Likelihood) [] = 
     let totalCount = 
         tokenCounts 
         |> Seq.sumBy snd
@@ -325,15 +324,18 @@ let computeLikelihoods (tokenCounts: TokenCount []): (Token * Likelihood) [] =
         token, tokenLikihood)
     |> Seq.toArray
 
-let likelihood (label: Label): Label * Map<Token, Likelihood> =
-    bowByLabel.[label]
-    |> computeLikelihoods
-    |> Map
-    |> fun xs -> label, xs
+let tokenLikelihoods (label : Label): (Label * Map<Token, Likelihood>) option =
+    match bowByLabel.TryFind label with
+    | Some bow -> 
+        bow
+        |> computeLikelihoods
+        |> Map
+        |> fun xs -> Some (label, xs)
+    | None -> None
 
 let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> = 
     labels
-    |> Seq.map likelihood
+    |> Seq.choose tokenLikelihoods
     |> Seq.toArray
     |> Map
 
@@ -341,11 +343,15 @@ let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> =
 ### Token score
 *)
 
-let tokenScore (likelihoods: Map<Token, Likelihood>) 
-               (totalCount: Count)
-               (tokenCount: Token * Count): TokenScore = 
+(**
+Take logs to prevent underflow
+*)
 
-    match likelihoods.TryFind(fst tokenCount) with
+let tokenScore (likelihoods : Map<Token, Likelihood>) 
+               (totalCount : Count)
+               (tokenCount : Token * Count): TokenScore = 
+
+    match likelihoods.TryFind (fst tokenCount) with
     | Some l -> 
         l ** float (snd tokenCount)
         |> log 
@@ -354,19 +360,22 @@ let tokenScore (likelihoods: Map<Token, Likelihood>)
         |> log
 
 let scoreTokenByLabel label = 
-    tokenScore likelihoodsByLabel.[label] tokenCountsByLabel.[label]
+    let labelLikelihoods, labelBow = 
+        likelihoodsByLabel.[label], bowByLabel.[label]
+
+    tokenScore labelLikelihoods (labelBow |> Seq.sumBy snd)
 
 (**
 ### Scoring Bag-of-Words
 *)
 
-let scoreBowByLabel (bow: BagOfWords) (label: Label): Label * DocScore = 
+let scoreBowByLabel (bow: BagOfWords) (label: Label): Label * Prior= 
     bow
     |> Seq.map (scoreTokenByLabel label)
     |> Seq.fold (+) (log labelPriors.[label])
     |> fun score -> label, score
 
-let classifyBow (bow: BagOfWords): Label = 
+let classifyBow (bow : BagOfWords): Label = 
     let bowToScore = scoreBowByLabel bow
     labels
     |> Seq.map bowToScore
@@ -377,11 +386,11 @@ let classifyBow (bow: BagOfWords): Label =
 ### Evaluate
 *)
 
-let evaluate (labelledBoW: (Label * BagOfWords)[]): float =
+let evaluate (labelledBoW : (Label * BagOfWords) []): float =
     labelledBoW
     |> Seq.averageBy (fun (target, bow) ->  
         if classifyBow bow = target then 1. 
         else 0.)
 
-evaluate (train |> Array.take 10000)
+evaluate train
 evaluate test
