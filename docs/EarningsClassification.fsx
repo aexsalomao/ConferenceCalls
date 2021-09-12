@@ -87,7 +87,6 @@ let earsHist (ears : float []) (thresh: float) =
             filteredEars
             |> Chart.Histogram
             |> Chart.withTraceName ($"{name} ({pct}%%)")
-
     [
         obsToPlot "Negative" (fun ret -> ret <= -thresh)
         obsToPlot "Neutral" (fun ret -> abs ret < thresh)
@@ -116,11 +115,6 @@ earsHist earsToPlot 0.05 |> GenericChart.toChartHTML
 *)
 
 (**
-Before jumping into any sort of text mining technique or analytics, we must first 
-convert our unstructered dataset.
-*)
-
-(**
 Basic steps:
 1. Choose the scope of text to be processed
 2. Tokenize
@@ -132,30 +126,6 @@ Basic steps:
 *)
 
 (**
-### Scope of text
-*)
-
-(**
-Some paragraphs are longer than others, and some paragraphs aren't even real paragraphs. 
-One-liners like opening and closing remarks add noise to our dataset and should be taken care of.
-We can filter for short paragraphs by counting the number of characters present in each paragraph. 
-On average, a paragraph contains 3-4 sentences and each sentence contains about 75-100 characters.
-Since we want to eliminate short paragraphs, we will filter them out by their character count (<100).
-*)
-
-/// Filter paragraphs by character count
-let shortParagraphs = 
-    myEars
-    |> Array.collect (fun xs -> 
-        xs.EarningsCall.Transcript
-        |> Array.filter (fun paragraph -> paragraph.Length < 100))
-
-shortParagraphs
-|> Array.take 5
-|> Array.iter (printfn "%s")
-(*** include-output***)
-
-(**
 ### Preprocessing paragraphs pipeline
 *)
 
@@ -165,46 +135,31 @@ open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
 let preprocessParagraph (paragraph : string) = 
-    // Scope of text
-    if paragraph.Length > 100 then
-        paragraph
-        // Detect sentence boundaries
-        |> splitParagraph
-        |> Array.collect (fun phrase ->
-            phrase
-            // Normalize
-            |> getOnlyWords
-            |> expandContractions
-            // Tokenize
-            |> nGrams 1
-            // Stop words removal
-            |> Array.choose removeStopWords
-            // Empty string removal
-            |> Array.filter (fun xs -> xs.Length <> 0))
-        |> Some
-    else None
+    paragraph
+    // Detect sentence boundaries
+    |> splitParagraph
+    |> Array.collect (fun phrase ->
+        phrase
+        // Normalize
+        |> getOnlyWords
+        |> expandContractions
+        // Tokenize
+        |> nGrams 1
+        // Stop words removal
+        |> Array.choose removeStopWords
+        // Empty string removal
+        |> Array.filter (fun xs -> xs.Length <> 0))
 
-let sample = 
-    [|
-    "Elon Musk -- Chief Executive Officer"
-    
-    "Sure. So to recap, Q2 2021 was a record quarter on many levels. 
-    We achieved record production, deliveries, and surpassed over $1 billion 
-    in GAAP net income for the first time in Tesla's history. I'd really like 
-    to congratulate everyone in Tesla for the amazing job."
+let generateBow (call : EarningsCall) = 
+    call.Transcript
+    |> Seq.collect preprocessParagraph
+    // Bag-of-words representation
+    |> Seq.countBy id
+    |> Seq.toArray
 
-    "This is really an incredible milestone. It also seems that public sentiment 
-    toward EVs is at an inflection point. And at this point, I think almost everyone 
-    agrees that electric vehicles are the only way forward. Regarding supply chain, 
-    while we're making cars at full speed, the global chip shortage situation remains 
-    quite serious."
-    |]
-
-sample
-|> Array.choose preprocessParagraph
-|> Array.concat
-// Bag-of-words representation
-|> Array.countBy id
+myEars
+|> Seq.tryFind (fun xs -> xs.EarningsCall.CallId.Ticker = "TSLA")
+|> Option.map (fun xs -> generateBow xs.EarningsCall)
 
 (**
 ### Splitting Data: Train and Test sets
@@ -224,23 +179,13 @@ let getTrainTest cutoffPct ears =
         let cutoff = float xs.Length * cutoffPct
         xs.[.. int cutoff], xs.[int cutoff + 1 ..]
 
-let generateFeatureAndLabel (thresh : float) (ear : EarningsAnnouncementReturn): (Label * BagOfWords) option = 
+let generateFeatureAndLabel (thresh : float) 
+                            (ear : EarningsAnnouncementReturn): (Label * BagOfWords) option = 
     match ear.Ear with
-    | Some earVal -> 
-        let bow = 
-            ear.EarningsCall.Transcript
-            // Text-preprocessing
-            |> Array.Parallel.choose preprocessParagraph
-            |> Array.concat
-            // Bag-of-words
-            |> Array.countBy id
-
-        Some (makeLabel earVal thresh, bow)
-    | None -> None
-
-let filterByEar thresh ear = 
-    match ear.Ear with
-    | Some earVal when abs earVal >= thresh -> Some ear
+    // Filter for significant ears
+    | Some earVal when abs earVal >= thresh -> 
+        Some (makeLabel earVal thresh, 
+              generateBow ear.EarningsCall)
     | _ -> None
 
 (**
@@ -249,16 +194,13 @@ Splitting Data: Train and Test
 
 let train, test = 
     let thresh = 0.05
-    let significantEars, generateData, splitData = 
-        // Only keep obs with high abs (Ears)
-        filterByEar thresh, 
-        // Label obs and create Bag-of-Words
+    let generateData, splitData = 
+        // Label call and generate Bag-of-Words
         generateFeatureAndLabel thresh,
-        // Split dataset (0.9 -> Train)
+        // Split dataset (Train)
         getTrainTest 0.9
     
     myEars
-    |> Seq.choose significantEars
     |> Seq.choose generateData
     |> splitData
 
@@ -278,64 +220,94 @@ let labelPriors: Map<Label, Prior>=
     train
     |> Array.groupBy fst
     |> Array.map (fun (label, labelsFreqs) -> 
-        let labelPrior =  (float labelsFreqs.Length)/(float n)
-        label, labelPrior)
+        let prior =  (float labelsFreqs.Length)/(float n)
+        label, prior)
     |> Map
 
-labelPriors
+(**
+### Vocabulary
+*)
+
+let vocabulary = 
+    train
+    |> Array.collect (fun (_, bow) -> 
+        bow
+        |> Array.map fst)
+    |> Array.distinct
+
+vocabulary.Length
 
 (**
-### Bag-of-Words by Label, Token counts
+### Bag-of-Words by label (laplace corrected)
 *)
 
 let bowByLabel: Map<Label, BagOfWords> = 
-    let tokenCounts (xs : (Label * (TokenCount) array) array) = 
+    
+    // Add label token counts
+    let generateLabelBow (xs : (Label * (TokenCount) []) []) = 
         xs 
         |> Seq.collect snd
         |> Seq.groupBy fst
         |> Seq.map (fun (token, tokenCount) -> 
             let totalCount = tokenCount |> Seq.sumBy snd
             token, totalCount)
-        |> Seq.toArray
+        |> Map
+    
+    // Laplace correction
+    let fillMissingVocab (labelBow: Map<Token , Count>) = 
+        vocabulary
+        |> Array.choose (fun vocabToken ->
+            match labelBow.TryFind vocabToken with
+            | Some count -> Some (vocabToken, count + 1)
+            | None -> Some (vocabToken, 1))
 
     train
     |> Array.groupBy fst
     |> Array.map (fun (label, xs) -> 
-        label, tokenCounts xs)
+            let bow = 
+                generateLabelBow xs
+                |> fillMissingVocab
+            label, bow)
     |> Map
 
 (**
-### Token Likelihoods by Label
+### Label counts
 *)
-
+        
 let labels: Label [] = 
     train
     |> Seq.distinctBy fst
     |> Seq.map fst
     |> Seq.toArray
 
-let computeLikelihoods (tokenCounts : TokenCount []): (Token * Likelihood) [] = 
-    let totalCount = 
-        tokenCounts 
-        |> Seq.sumBy snd
-    tokenCounts
-    |> Seq.map (fun (token, freq) -> 
-        let tokenLikihood = (float freq / float totalCount)
+let countsByLabel = 
+    labels
+    |> Seq.map (fun label -> 
+        label, bowByLabel.[label] |> Seq.sumBy snd)
+    |> Map
+
+(**
+### Likelihoods by Label
+*)
+
+let computeLikelihoods (label: Label) 
+                       (bow : BagOfWords) : (Token * Likelihood) [] = 
+    bow
+    |> Seq.map (fun (token, count) -> 
+        let tokenLikihood = 
+            (float count) / (float countsByLabel.[label])
         token, tokenLikihood)
     |> Seq.toArray
 
-let tokenLikelihoods (label : Label): (Label * Map<Token, Likelihood>) option =
-    match bowByLabel.TryFind label with
-    | Some bow -> 
-        bow
-        |> computeLikelihoods
-        |> Map
-        |> fun xs -> Some (label, xs)
-    | None -> None
+let tokenLikelihoods (label : Label): (Label * Map<Token, Likelihood>) =
+    bowByLabel.[label]
+    |> computeLikelihoods label
+    |> Map
+    |> fun xs -> (label, xs)
 
 let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> = 
     labels
-    |> Seq.choose tokenLikelihoods
+    |> Seq.map tokenLikelihoods
     |> Seq.toArray
     |> Map
 
@@ -350,33 +322,36 @@ Take logs to prevent underflow
 let tokenScore (likelihoods : Map<Token, Likelihood>) 
                (totalCount : Count)
                (tokenCount : Token * Count): TokenScore = 
+    let token, count = tokenCount
 
-    match likelihoods.TryFind (fst tokenCount) with
+    match likelihoods.TryFind token with
     | Some l -> 
-        l ** float (snd tokenCount)
+        l ** float (count)
         |> log 
     | None -> 
-        (1./float totalCount) ** float (snd tokenCount)
+        // Laplace correctioncount
+        (1./float (totalCount + 1)) ** float (count)
         |> log
 
 let scoreTokenByLabel label = 
-    let labelLikelihoods, labelBow = 
-        likelihoodsByLabel.[label], bowByLabel.[label]
+    let labelLikelihoods, labelCounts = 
+        likelihoodsByLabel.[label], countsByLabel.[label]
 
-    tokenScore labelLikelihoods (labelBow |> Seq.sumBy snd)
+    tokenScore labelLikelihoods labelCounts
 
 (**
 ### Scoring Bag-of-Words
 *)
 
-let scoreBowByLabel (bow: BagOfWords) (label: Label): Label * Prior= 
+let score (bow : BagOfWords) 
+          (label : Label): Label * Prior= 
     bow
     |> Seq.map (scoreTokenByLabel label)
     |> Seq.fold (+) (log labelPriors.[label])
     |> fun score -> label, score
 
-let classifyBow (bow : BagOfWords): Label = 
-    let bowToScore = scoreBowByLabel bow
+let classify (bow : BagOfWords): Label = 
+    let bowToScore = score bow
     labels
     |> Seq.map bowToScore
     |> Seq.maxBy snd
@@ -389,7 +364,7 @@ let classifyBow (bow : BagOfWords): Label =
 let evaluate (labelledBoW : (Label * BagOfWords) []): float =
     labelledBoW
     |> Seq.averageBy (fun (target, bow) ->  
-        if classifyBow bow = target then 1. 
+        if classify bow = target then 1. 
         else 0.)
 
 evaluate train

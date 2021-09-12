@@ -34,7 +34,7 @@ type EarningsAnnouncementReturn =
         Sentiment: Sentiment option 
         Ear: float option 
     }
-    
+
 /// ClassifyingEarningsCalls
 
 type Label = Sentiment
