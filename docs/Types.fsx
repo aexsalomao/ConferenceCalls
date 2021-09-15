@@ -48,3 +48,5 @@ type BagOfWords = TokenCount []
 
 type TokenScore = float
 type DocScore = float
+
+type TokenLikelihoods = Map<Token, Likelihood>

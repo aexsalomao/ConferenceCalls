@@ -215,13 +215,5 @@ module French =
                   Rf = float parsedLine.RF / 100.0 
                   Frequency = Monthly })
 
-module Fred =
-    type Series = CsvProvider<"https://fred.stlouisfed.org/graph/fredgraph.csv?id=GS10",
-                              Schema="Date,Value (float)",
-                              MissingValues=".">
-    let private fredUrl series = $"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
-    
-    ///<summary>Gets a FRED data series as a CsvProvider</summary>
-        /// <param name="series">The series name such as GS10, EXUSEU, etc.</param>
-    let get (series:string) =  Series.Load(fredUrl series)
+
     
