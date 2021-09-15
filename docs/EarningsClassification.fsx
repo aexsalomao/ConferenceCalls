@@ -33,21 +33,16 @@ a Naive Bayes classifier is often a good place to start.
 open System
 Environment.CurrentDirectory <- __SOURCE_DIRECTORY__
 
-#r "nuget: FSharp.Collections.ParallelSeq"
 #r "nuget: FSharp.Stats"
 #r "nuget: Newtonsoft.Json"
 #r "nuget: Plotly.NET, 2.0.0-preview.6"
 
 #load "Types.fsx"
 
-open System.Text.RegularExpressions
-open FSharp.Collections.ParallelSeq
 open Types
 open Newtonsoft.Json
 open Plotly.NET
 open FSharp.Stats
-
-fsi.AddPrinter<DateTime>(fun dt -> dt.ToString("s"))
 
 (**
 ## Read transcripts from json file
@@ -134,7 +129,8 @@ open Preprocessing.Normalization
 open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
-let preprocessParagraph (paragraph : string) = 
+let nGramsTokenizer (nGram : int)
+                    (paragraph : string) = 
     paragraph
     // Detect sentence boundaries
     |> splitParagraph
@@ -144,22 +140,26 @@ let preprocessParagraph (paragraph : string) =
         |> getOnlyWords
         |> expandContractions
         // Tokenize
-        |> nGrams 1
+        |> nGrams nGram
         // Stop words removal
         |> Array.choose removeStopWords
         // Empty string removal
         |> Array.filter (fun xs -> xs.Length <> 0))
 
-let generateBow (call : EarningsCall) = 
+let generateBow (nGram : int)
+                (call : EarningsCall) = 
     call.Transcript
-    |> Seq.collect preprocessParagraph
+    |> Seq.collect (nGramsTokenizer nGram)
     // Bag-of-words representation
     |> Seq.countBy id
     |> Seq.toArray
 
 myEars
 |> Seq.tryFind (fun xs -> xs.EarningsCall.CallId.Ticker = "TSLA")
-|> Option.map (fun xs -> generateBow xs.EarningsCall)
+|> Option.map (fun xs -> 
+    generateBow 2 xs.EarningsCall 
+    |> Array.sortByDescending snd
+    |> Array.take 10)
 
 (**
 ### Splitting Data: Train and Test sets
@@ -171,7 +171,7 @@ let makeLabel earVal thresh =
     else Neutral
 
 let getTrainTest cutoffPct ears = 
-    let rnd = System.Random(42)
+    let rnd = System.Random(0)
     ears
     |> Seq.sortBy (fun _ -> rnd.Next())
     |> Seq.toArray
@@ -179,33 +179,104 @@ let getTrainTest cutoffPct ears =
         let cutoff = float xs.Length * cutoffPct
         xs.[.. int cutoff], xs.[int cutoff + 1 ..]
 
-let generateFeatureAndLabel (thresh : float) 
+let generateFeatureAndLabel (nGram : int)
+                            (thresh : float) 
                             (ear : EarningsAnnouncementReturn): (Label * BagOfWords) option = 
     match ear.Ear with
     // Filter for significant ears
     | Some earVal when abs earVal >= thresh -> 
         Some (makeLabel earVal thresh, 
-              generateBow ear.EarningsCall)
+              generateBow nGram ear.EarningsCall)
     | _ -> None
 
 (**
-Splitting Data: Train and Test
+### Term Frequency - Inverse Document Frequency (Bag-of-words approach)
 *)
 
-let train, test = 
-    let thresh = 0.05
-    let generateData, splitData = 
-        // Label call and generate Bag-of-Words
-        generateFeatureAndLabel thresh,
-        // Split dataset (Train)
-        getTrainTest 0.9
-    
-    myEars
-    |> Seq.choose generateData
-    |> splitData
+(**
+#### Term frequency (Tf)
+*)
 
-train.Length
-test.Length
+let termFreq (bow : BagOfWords) : (Token * float) [] = 
+    let docTokenCounts = Seq.sumBy snd bow
+
+    bow
+    |> Seq.map (fun (token, count) -> 
+        let tf = (float count)/(float docTokenCounts)
+        token, tf)
+    |> Seq.toArray
+
+(**
+#### Inverse document frequency (Idf)
+*)
+
+let inverseDocFreq (trainSamples : (Label * BagOfWords) []) : Map<Token, float> = 
+    let n = trainSamples.Length
+
+    trainSamples
+    |> Array.collect (fun (_, bow) -> 
+        bow
+        // Convert token counts to 1
+        |> Array.map (fun (token, _) -> token, 1))
+    // Group by token
+    |> Array.groupBy fst
+    // Sum occurences and compute idf
+    |> Array.map (fun (token, tokenCounts) -> 
+        
+        let idf = 
+            tokenCounts
+            |> Array.sumBy snd
+            |> fun numDocsWithToken -> 
+                (float n) / (float numDocsWithToken) 
+                |> log
+
+        token, idf)
+    |> Map
+
+(**
+#### Term frequency - inverse document frequency (TfIdf)
+*)
+
+let tfIdf (idf : Map<Token, float>) 
+          (idfPrior : float)
+          (bow : BagOfWords) = 
+
+    termFreq bow
+    |> Seq.choose (fun (token, tf) -> 
+        match idf.TryFind token with
+        // Word appeared in train
+        | Some idf -> 
+            let tfIdf = tf * idf
+            Some (token, tfIdf)
+        // Word did not appear in train (very rare word -> 0. ?)
+        | None -> 
+            let tfIdf = tf * idfPrior
+            Some (token, tfIdf))
+    |> Seq.toArray
+
+(**
+#### Filter Train and Test by TfIdf
+*)
+
+let filterByTfIdf (idf : Map<Token, float>)
+                  (idfPrior : float)
+                  (thresh : float)
+                  (sample : Label * BagOfWords) = 
+
+    let label, bow = sample
+
+    let filteredBow = 
+        tfIdf idf idfPrior bow
+        |> Seq.sortByDescending snd
+        |> Seq.map fst
+        |> Seq.take ((thresh * float bow.Length) |> int)
+        |> Set
+        |> fun highValueTokens -> 
+            bow
+            |> Array.filter (fun (token, _) -> 
+                highValueTokens.Contains token)
+                
+    (label, filteredBow)
 
 (**
 ### Multinomial Naive Bayes: Bag of words approach
@@ -215,9 +286,9 @@ test.Length
 ### Priors
 *)
 
-let labelPriors: Map<Label, Prior>= 
-    let n = train.Length
-    train
+let getPriors (trainSample : (Label * BagOfWords)[]): Map<Label, Prior>= 
+    let n = trainSample.Length
+    trainSample
     |> Array.groupBy fst
     |> Array.map (fun (label, labelsFreqs) -> 
         let prior =  (float labelsFreqs.Length)/(float n)
@@ -225,90 +296,72 @@ let labelPriors: Map<Label, Prior>=
     |> Map
 
 (**
-### Vocabulary
+#### Vocabulary
 *)
 
-let vocabulary = 
-    train
+// Vocabulary from filtered corpus
+let getCorpusVocab (trainSamples : (Label * BagOfWords) [])= 
+    trainSamples
     |> Array.collect (fun (_, bow) -> 
         bow
         |> Array.map fst)
-    |> Array.distinct
-
-vocabulary.Length
+    |> Set
 
 (**
-### Bag-of-Words by label (laplace corrected)
+#### Combining samples to form a bag-of-words for each label
 *)
 
-let bowByLabel: Map<Label, BagOfWords> = 
-    
-    // Add label token counts
-    let generateLabelBow (xs : (Label * (TokenCount) []) []) = 
-        xs 
-        |> Seq.collect snd
-        |> Seq.groupBy fst
-        |> Seq.map (fun (token, tokenCount) -> 
-            let totalCount = tokenCount |> Seq.sumBy snd
-            token, totalCount)
-        |> Map
-    
-    // Laplace correction
-    let fillMissingVocab (labelBow: Map<Token , Count>) = 
-        vocabulary
-        |> Array.choose (fun vocabToken ->
-            match labelBow.TryFind vocabToken with
-            | Some count -> Some (vocabToken, count + 1)
-            | None -> Some (vocabToken, 1))
 
-    train
+let labels = 
+    [|
+        Positive
+        Negative
+    |]
+
+// Creates Label BoW
+let combineBow (samples : (Label * BagOfWords) []) = 
+    samples 
+    |> Seq.collect snd
+    |> Seq.groupBy fst
+    |> Seq.map (fun (token, tokenCounts) -> 
+        let totalCount = Seq.sumBy snd tokenCounts
+        token, totalCount)
+    |> Map
+
+// Laplace correction
+let fillMissingVocab (vocab : Set<Token>)
+                     (labelBow : Map<Token , Count>): BagOfWords = 
+    vocab
+    |> Set.toArray
+    |> Array.choose (fun vocabToken ->
+        match labelBow.TryFind vocabToken with
+        | Some count -> Some (vocabToken, count + 1)
+        | None -> Some (vocabToken, 1))
+
+let getLabelBows (vocab : Set<Token>)
+                 (samples : (Label * BagOfWords) []): Map<Label, BagOfWords> = 
+    samples
     |> Array.groupBy fst
-    |> Array.map (fun (label, xs) -> 
-            let bow = 
-                generateLabelBow xs
-                |> fillMissingVocab
-            label, bow)
+    |> Array.map (fun (label, samples) -> 
+        let bow = 
+            fillMissingVocab vocab (combineBow samples)
+        label, bow)
     |> Map
 
 (**
-### Label counts
-*)
-        
-let labels: Label [] = 
-    train
-    |> Seq.distinctBy fst
-    |> Seq.map fst
-    |> Seq.toArray
-
-let countsByLabel = 
-    labels
-    |> Seq.map (fun label -> 
-        label, bowByLabel.[label] |> Seq.sumBy snd)
-    |> Map
-
-(**
-### Likelihoods by Label
+### Token Likelihoods by Label
 *)
 
-let computeLikelihoods (label: Label) 
-                       (bow : BagOfWords) : (Token * Likelihood) [] = 
-    bow
-    |> Seq.map (fun (token, count) -> 
-        let tokenLikihood = 
-            (float count) / (float countsByLabel.[label])
-        token, tokenLikihood)
-    |> Seq.toArray
-
-let tokenLikelihoods (label : Label): (Label * Map<Token, Likelihood>) =
-    bowByLabel.[label]
-    |> computeLikelihoods label
-    |> Map
-    |> fun xs -> (label, xs)
-
-let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> = 
-    labels
-    |> Seq.map tokenLikelihoods
-    |> Seq.toArray
+let getLabelLikelihoods (labelBows : Map<Label, BagOfWords>): Map<Label, Map<Token, Likelihood>> = 
+    labelBows
+    |> Map.toArray
+    |> Array.map (fun (label, bow) ->
+        let n = Seq.sumBy snd bow
+        let likelihoods = 
+            bow
+            |> Array.map (fun (token, count) -> 
+                token, (float count)/(float n))
+        label, likelihoods |> Map)
     |> Map
 
 (**
@@ -319,41 +372,49 @@ let likelihoodsByLabel: Map<Label, Map<Token, Likelihood>> =
 Take logs to prevent underflow
 *)
 
-let tokenScore (likelihoods : Map<Token, Likelihood>) 
-               (totalCount : Count)
-               (tokenCount : Token * Count): TokenScore = 
+let getTokenScores (tokenLikelihoods : Map<Token, Likelihood>)
+                   (uniformPrior : float)
+                   (tokenCount : Token * Count) = 
+    
     let token, count = tokenCount
 
-    match likelihoods.TryFind token with
+    match tokenLikelihoods.TryFind token with
     | Some l -> 
-        l ** float (count)
-        |> log 
+        let tokenScore = log (l ** (float count))
+        Some tokenScore
     | None -> 
-        // Laplace correctioncount
-        (1./float (totalCount + 1)) ** float (count)
-        |> log
+        let tokenScore = log (uniformPrior ** (float count))
+        Some tokenScore
 
-let scoreTokenByLabel label = 
-    let labelLikelihoods, labelCounts = 
-        likelihoodsByLabel.[label], countsByLabel.[label]
+let getDocScores (labelLikelihoods : Map<Label, Map<Token, Likelihood>>)
+                 (priors : Map<Label, float>)
+                 (bow : BagOfWords) = 
 
-    tokenScore labelLikelihoods labelCounts
+    labels
+    |> Array.choose (fun label -> 
+        match labelLikelihoods.TryFind label with
+        | Some tL -> 
+            let avgLikelihood = 
+                tL
+                |> Map.toArray
+                |> Array.averageBy snd
+
+            bow 
+            |> Array.choose (getTokenScores tL avgLikelihood)
+            |> Array.fold (+) (log priors.[label])
+            |> fun docScore ->
+                Some (label, docScore)
+        | None -> None)
 
 (**
-### Scoring Bag-of-Words
+### Classify
 *)
 
-let score (bow : BagOfWords) 
-          (label : Label): Label * Prior= 
-    bow
-    |> Seq.map (scoreTokenByLabel label)
-    |> Seq.fold (+) (log labelPriors.[label])
-    |> fun score -> label, score
-
-let classify (bow : BagOfWords): Label = 
-    let bowToScore = score bow
-    labels
-    |> Seq.map bowToScore
+let classifyWith (labelLikelihoods : Map<Label, Map<Token, Likelihood>>)
+                 (priors : Map<Label, float>)
+                 (bow : BagOfWords): Label = 
+              
+    getDocScores labelLikelihoods priors bow
     |> Seq.maxBy snd
     |> fst
 
@@ -361,11 +422,146 @@ let classify (bow : BagOfWords): Label =
 ### Evaluate
 *)
 
-let evaluate (labelledBoW : (Label * BagOfWords) []): float =
-    labelledBoW
-    |> Seq.averageBy (fun (target, bow) ->  
-        if classify bow = target then 1. 
+let evaluate (classifier: BagOfWords -> Label)
+             (testSamples: (Label * BagOfWords) []): float =
+    testSamples
+    |> Seq.averageBy (fun (label, bow) ->  
+        if classifier bow = label then 1. 
         else 0.)
 
-evaluate train
-evaluate test
+(**
+### Build Classifier
+*)
+
+let buildClassifier (trainSample : (Label *BagOfWords) []) = 
+    
+    let vocab, priors = 
+        getCorpusVocab trainSample,
+        getPriors trainSample
+
+    let labelLikelihoods = 
+        getLabelBows vocab trainSample
+        |> getLabelLikelihoods
+ 
+    classifyWith labelLikelihoods priors
+
+(**
+### Split Data: Train and Test
+*)
+
+type PreprocessingParams = 
+    { 
+        ReturnThreshold : float
+        NGrams : int
+        TopKPctTfIdf : float
+        TrainSplit : float
+    }
+
+let applyTfIdfFilter (topKPctIfIdf : float)
+                     (train, test) =
+
+    let corpusIdf = inverseDocFreq train
+    let idfPrior = 
+        corpusIdf
+        |> Map.toArray
+        |> Array.averageBy snd
+
+    let tfIdfFilter = 
+        filterByTfIdf corpusIdf idfPrior topKPctIfIdf
+
+    Array.map tfIdfFilter train,
+    Array.map tfIdfFilter test
+
+let trainTestSplit (modelParams : PreprocessingParams)
+                   (ears : EarningsAnnouncementReturn []) =
+
+    let generateData, splitData = 
+        // Label call and generate Bag-of-Words
+        generateFeatureAndLabel modelParams.NGrams modelParams.ReturnThreshold,
+        // Split dataset (Train)
+        getTrainTest modelParams.TrainSplit
+    
+    ears
+    |> Seq.choose generateData
+    |> splitData
+    // Tf-Idf filter
+    |> applyTfIdfFilter modelParams.TopKPctTfIdf
+
+let evaluateModel (model : PreprocessingParams) 
+                  (ears : EarningsAnnouncementReturn []) = 
+    // Split data
+    let train, test = trainTestSplit model ears
+
+    // Build classifier
+    let classifier = buildClassifier train
+
+    // Evaluate
+    evaluate classifier train,
+    evaluate classifier test
+
+(**
+#### Model 1
+*)
+
+// Set model parameters
+let model1 = 
+    { ReturnThreshold = 0.05
+      NGrams = 1
+      TopKPctTfIdf = 0.75
+      TrainSplit = 0.8 }
+
+let m1 = evaluateModel model1 myEars
+
+(**
+#### Model 2
+*)
+
+// Set model parameters
+let model2 = 
+    { ReturnThreshold = 0.05
+      NGrams = 1
+      TopKPctTfIdf = 0.5
+      TrainSplit = 0.8 }
+
+// Evaluate
+let m2 = evaluateModel model2 myEars
+
+(**
+#### Model 3
+*)
+
+// Set model parameters
+let model3 = 
+    { ReturnThreshold = 0.05
+      NGrams = 1
+      TopKPctTfIdf = 0.25
+      TrainSplit = 0.8 }
+
+// Evaluate
+let m3 = evaluateModel model3 myEars
+
+(**
+#### Model 4
+*)
+
+let model4 = 
+    { ReturnThreshold = 0.05
+      NGrams = 1
+      TopKPctTfIdf = 0.25
+      TrainSplit = 0.8 }
+
+// Evaluate
+let m4 = evaluateModel model4 myEars
+
+(**
+#### Model 5
+*)
+
+let model5 = 
+    { ReturnThreshold = 0.05
+      NGrams = 3
+      TopKPctTfIdf = 0.2
+      TrainSplit = 0.8 }
+
+// Evaluate
+let m5 = evaluateModel model5 myEars
