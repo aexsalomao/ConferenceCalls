@@ -9,16 +9,16 @@ open FSharp.Data
 /// TranscriptParsing
 type CallId =
     {
-        Ticker: string 
-        Exchange: string
-        Date: System.DateTime
+        Ticker : string 
+        Exchange : string
+        Date : System.DateTime
         FiscalQuarter : int     
     }
 
 type EarningsCall = 
     {
         CallId : CallId
-        Transcript: string [] 
+        Transcript : string [] 
     }
 
 /// EarningsAnnouncementReturn
@@ -29,24 +29,31 @@ type Sentiment =
 
 type EarningsAnnouncementReturn =
     {
-        EarningsCall: EarningsCall
-        TiingoObs: Common.Tiingo.TiingoObs []
-        Sentiment: Sentiment option 
-        Ear: float option 
+        EarningsCall : EarningsCall
+        TiingoObs : Common.Tiingo.TiingoObs []
+        Sentiment : Sentiment option 
+        Ear : float option 
     }
 
 /// ClassifyingEarningsCalls
 
 type Label = Sentiment
-type Prior = float
+
 type Token = string
 type Count = int
-type Likelihood = float
-
 type TokenCount = Token * Count
-type BagOfWords = TokenCount []
+type BagOfWords = TokenCount list
+
+type Tf = float 
+type Idf = float
+type TfIdf = float
+
+type Prior = float
+type Likelihood = float
 
 type TokenScore = float
 type DocScore = float
 
 type TokenLikelihoods = Map<Token, Likelihood>
+
+type Accuracy = float
