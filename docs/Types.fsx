@@ -2,10 +2,6 @@
 
 #load "Common.fsx"
 
-open System
-open System.IO
-open FSharp.Data
-
 /// TranscriptParsing
 type CallId =
     {
@@ -35,25 +31,26 @@ type EarningsAnnouncementReturn =
         Ear : float option 
     }
 
-/// ClassifyingEarningsCalls
-
-type Label = Sentiment
-
+/// Multinomial Naive Bayes Classifier
 type Token = string
+type Tokenizer = string -> Token []
+
+type Document = Token []
+type Class = Sentiment
+type LabelledDocument = Document * Class
+
 type Count = int
 type TokenCount = Token * Count
-type BagOfWords = TokenCount list
+type BagOfWords = TokenCount []
+type LabelledBagOfWords = BagOfWords * Class
 
-type Tf = float 
-type Idf = float
-type TfIdf = float
+type NbClassifier = BagOfWords -> Class
 
 type Prior = float
 type Likelihood = float
+type TokenLikelihoods = Map<Token, Likelihood>
 
 type TokenScore = float
-type DocScore = float
-
-type TokenLikelihoods = Map<Token, Likelihood>
+type DocumentScore = float
 
 type Accuracy = float

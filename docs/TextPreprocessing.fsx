@@ -318,51 +318,46 @@ module NltkData =
 
 module TermFrequencies = 
 
-    type DocTransfromer = string -> string []
-    
-    /// Term-frequencies
-    type TermFreq = {Term: string; Tf: float } 
-
-    let tf (docTransformer: DocTransfromer) (doc: string): TermFreq [] =
-        let terms = docTransformer doc
-        let nTerms = float terms.Length
-
-        terms
-        |> Seq.countBy id
-        |> Seq.map (fun (term, count) ->
-            let tf = (float count)/ nTerms
-            {Term = term; Tf = tf})
-        |> Seq.toArray
-    
-    /// Inverse-document frequencies
-    type InverseDocFreq = {Term: string; Idf : float } 
-
-    let idf (docTransfromer: DocTransfromer) (docs : string []): Map<string, InverseDocFreq> = 
-        let n = docs.Length
+    let tf bow = 
         
-        let numberOfDocsByTerm = 
-            docs
-            |> Seq.map docTransfromer
-            |> Seq.collect Seq.distinct
-            |> Seq.countBy id
-          
-        numberOfDocsByTerm
-        |> Seq.map (fun (term, docsWithTerm) -> 
-            let idf = (log (float n / float docsWithTerm))
-            term, {Term = term; Idf = idf})
-        |> Map
-    
-    /// Term-frequency inverse-document frequency
-    type TermFreqInverseDocFreq = {Term: string; TfIdf: float}
+        let docTokenCounts = 
+            Seq.sumBy snd bow
 
-    let tfIdf (doc: string)
-              (docTransformer : DocTransfromer)
-              (inverseDocFreq: Map<string, InverseDocFreq>): TermFreqInverseDocFreq [] = 
-       
-       tf docTransformer doc
-       |> Array.choose (fun termTf -> 
-       match inverseDocFreq.TryFind termTf.Term with
-       | None -> None
-       | Some termIdf -> 
-            let tfIdf = termTf.Tf * termIdf.Idf 
-            Some { Term=termTf.Term; TfIdf = tfIdf})
+        bow
+        |> Array.map (fun (token, count) -> 
+            let tf = (float count)/(float docTokenCounts)
+            token, tf)
+        |> Array.sortByDescending snd
+     
+    let idf bows= 
+
+        let numDocs = Seq.length bows
+
+        bows
+        |> Seq.collect (Seq.map fst)
+        |> Seq.countBy id
+        |> Seq.map (fun (token, numDocsWithToken) -> 
+            let idf = (float numDocs) / (float numDocsWithToken)
+            token, log idf)
+        |> Seq.sortByDescending snd
+        |> Seq.toArray
+
+    let tfIdf (idf : Map<'Token, float>) 
+              bow = 
+        
+        let idfPrior = 
+            idf 
+            |> Map.toArray 
+            |> Array.averageBy snd
+
+        tf bow
+        |> Array.choose (fun (token, tf) -> 
+            match idf.TryFind token with
+            // Word appeared in train
+            | Some idf -> 
+                let tfIdf = tf * idf
+                Some (token, tfIdf)
+            // Word did not appear in train 
+            | None -> 
+                let tfIdf = tf * idfPrior
+                Some ("UNK", tfIdf))
