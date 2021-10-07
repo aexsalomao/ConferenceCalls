@@ -32,24 +32,27 @@ type EarningsAnnouncementReturn =
     }
 
 /// Multinomial Naive Bayes Classifier
+
+/// Tokenizination
 type Token = string
 type Tokenizer = string -> Token []
-
 type Document = Token []
-type Class = Sentiment
+type Class = 
+    | Positive
+    | Negative
+    | Neutral
 type LabelledDocument = Document * Class
 
+/// Bag of Words 
 type Count = int
-type TokenCount = Token * Count
-type BagOfWords = TokenCount []
+type BagOfWords = (Token * Count) []
 type LabelledBagOfWords = BagOfWords * Class
 
+/// Naive Bayes Classifier
 type NbClassifier = BagOfWords -> Class
-
 type Prior = float
 type Likelihood = float
 type TokenLikelihoods = Map<Token, Likelihood>
-
 type TokenScore = float
 type DocumentScore = float
 

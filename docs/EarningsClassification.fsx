@@ -55,42 +55,6 @@ open Preprocessing.Tokenization
 open Preprocessing.NltkData
 
 (**
-## IMBD dataset
-*)
-
-let readFile path =
-    let text = File.ReadAllText(path)
-    text.Split(' ')    
-
-let readTheFiles path =
-    let files = Directory.GetFiles(path)
-    files |> Array.map readFile
-
-let posReviewsTrain : (string * Class) []  = 
-    readTheFiles "data-cache/ImdbTrain/pos"
-    |> Array.map (fun review -> (review |> String.concat(" ")), Positive)
-
-let negReviewsTrain : (string * Class) [] = 
-    readTheFiles "data-cache/ImdbTrain/neg"
-    |> Array.map (fun review -> (review |> String.concat(" ")), Negative)
-
-let imbdTrain = 
-    [|posReviewsTrain; negReviewsTrain|]
-    |> Array.concat
-
-let posReviewsTest : (string * Class) []  = 
-    readTheFiles "data-cache/ImdbTest/pos"
-    |> Array.map (fun review -> (review |> String.concat(" ")), Positive)
-
-let negReviewsTest : (string * Class) [] = 
-    readTheFiles "data-cache/ImdbTest/neg"
-    |> Array.map (fun review -> (review |> String.concat(" ")), Negative)
-
-let imbdTest = 
-    [|posReviewsTest; negReviewsTest|]
-    |> Array.concat
-
-(**
 ## Read transcripts from json file
 *)
 
@@ -182,7 +146,7 @@ trainRaw.Length
 testRaw.Length
 
 (**
-## AdHoc blacklists (Feature Engineering): 
+#### AdHoc blacklists : 
 1. Identifying proper nouns with NLTK database
 2. Fetching company names using requests
 *)
@@ -194,47 +158,17 @@ let nltkNames =
     |> Set
 
 (**
-## Backlist 2: Identifying company names using ticker symbols
-*)
-
-(**
 ## Preprocessing Text
 *)
 
 (**
-Basic steps:
-
-1. Choose the scope of text to be processed
-
-2. Tokenize
-
-3. Remove stop words
-
-4. Stem
-
-5. Normalize spelling
-
-6. Detect sentence boundaries
-
-7. Normalize case
-*)
-
-(**
-## Tokenization
-*)
-
-(**
-## Tokenizer
-*)
-
-(**
-### Tokenize documents
+#### Tokenize documents
 *)
 
 // Tokenize all documents
-let tokenizeDocument (nGram : int)
-                     (rawDocument : string) 
-                     : Token [] = 
+let tokenizeDocumentWith (nGram : int)
+                         (rawDocument : string) 
+                         : Token [] = 
     rawDocument.ToLowerInvariant().Split(" ")
     // Blacklist filter
     |> Array.filter (nltkNames.Contains >> not)
@@ -249,15 +183,15 @@ let tokenizeDocument (nGram : int)
     // Empty string removal
     |> Array.filter (fun xs -> xs.Length <> 0)
 
-let generateTokenizedDocuments (tokenizer : Tokenizer)
-                               (labelledRawDocuments : (string * Class) []) 
-                               : LabelledDocument [] = 
+let tokenizeDocuments (tokenizer : Tokenizer)
+                      (labelledRawDocuments : (string * Class) []) 
+                      : LabelledDocument [] = 
     labelledRawDocuments
     |> Array.Parallel.map (fun (doc, label) -> 
         tokenizer doc, label)
 
 (**
-### Bag of words representation
+#### Bag of words representation
 *)
 
 // Top Tokens from sample
@@ -285,53 +219,40 @@ let generateTopTokenBows (topTokens : Set<Token>)
                          (labelledDocuments : LabelledDocument []) 
                          : LabelledBagOfWords [] =
     labelledDocuments
-    |> Array.Parallel.map (fun (tokenizedDoc, label) -> 
-        getTopTokenBow topTokens tokenizedDoc, label)
+    |> Array.Parallel.map (fun (doc, label) -> 
+        getTopTokenBow topTokens doc, label)
 
 (**
-### Preprocess text
+#### Preprocess text
 *)
 
-type TextPreprocessor = 
+type TextVectorizer = 
     { NGram : int 
       MaxSampleTokens : int}
 
-let preprocessText (textPreprocessor : TextPreprocessor)
-                   (rawDocumentsTrain : (string * Class) []) 
-                   (rawDocumentsTest : (string * Class) [])
-                   : LabelledBagOfWords [] * LabelledBagOfWords [] = 
+let vectorizeTrainTest (textPreprocessor : TextVectorizer)
+                       (rawDocumentsTrain : (string * Class) []) 
+                       (rawDocumentsTest : (string * Class) [])
+                       : LabelledBagOfWords [] * LabelledBagOfWords [] = 
 
     // Tokenize documents (nGrams)
-    let nGramTokenizer = 
-        tokenizeDocument textPreprocessor.NGram
+    let tokenizer = 
+        tokenizeDocumentWith textPreprocessor.NGram
 
-    let tokenizedTrainRaw, tokenizedTestRaw = 
-        generateTokenizedDocuments nGramTokenizer rawDocumentsTrain,
-        generateTokenizedDocuments nGramTokenizer rawDocumentsTest
+    let tokenizedTrain, tokenizedTest = 
+        tokenizeDocuments tokenizer rawDocumentsTrain,
+        tokenizeDocuments tokenizer rawDocumentsTest
    
     // Generate bag of words using most frequent tokens
     let topTokens = 
-        getTopNTokens textPreprocessor.MaxSampleTokens tokenizedTrainRaw
+        getTopNTokens textPreprocessor.MaxSampleTokens tokenizedTrain
     
-    generateTopTokenBows topTokens tokenizedTrainRaw,
-    generateTopTokenBows topTokens tokenizedTestRaw
+    generateTopTokenBows topTokens tokenizedTrain,
+    generateTopTokenBows topTokens tokenizedTest
 
 (**
 ## Training the Naive Bayes classifier
 *)
-
-(**
-#### Vocabulary
-*)
-
-// Corpus vocabulary from Bow
-let getCorpusVocab (labelledBows : LabelledBagOfWords []) 
-                   : Set<Token> = 
-    labelledBows
-    |> Array.collect (fun (bow, _) -> 
-        bow
-        |> Array.map fst)
-    |> Set
 
 (**
 #### Class Priors
@@ -353,37 +274,46 @@ let getPriors (labelledBows : LabelledBagOfWords [])
 #### Aggregate Token Counts by Class -> Class Bag of Words
 *)
 
-let getClassBagofWords (labelledBow : LabelledBagOfWords [])
-                       : (Class * Token * Count) [] = 
+let getClassBagofWords 
+    (labelledBow : LabelledBagOfWords [])
+    : (Class * Token * Count) [] = 
+    
     labelledBow
     |> Array.groupBy snd
-    |> Array.collect (fun (c, classTokenCounts) -> 
-        classTokenCounts
+    |> Array.collect (fun (c, classBagOfWords) -> 
+        classBagOfWords
         |> Array.filter (fun (_, label) -> label=c)
         |> Array.collect fst
         |> Array.groupBy fst
-        |> Array.map (fun (token, tokenCounts) -> c, token, Array.sumBy snd tokenCounts))
+        |> Array.map (fun (token, tokenCounts) -> 
+            c, token, Array.sumBy snd tokenCounts))
 
 (**
 #### Token Likelihoods by Class
 *)
 
-let getTokenLikelihoods (labelledBows : LabelledBagOfWords [])
-                        : Map<Class, Map<Token, Likelihood>> = 
-    let vocabN = 
-        getCorpusVocab labelledBows |> Seq.length
-
-    getClassBagofWords labelledBows
+let computeTokenLikilihoods 
+    (classBagOfWords : (Class * Token * Count) [])
+    (vocabN : Count) 
+    : (Class * Token * Likelihood) [] = 
+    
+    classBagOfWords
     |> Array.groupBy (fun (_, token, _) -> token)
     |> Array.collect (fun (_, xs) -> 
-        let totalCounts = 
+        /// Compute total token counts within all classes
+        let totalTokenCounts = 
             xs
             |> Array.sumBy (fun (_, _, counts) -> counts)
+        /// Compute token likelihood for all classes (Laplace corrected)
         xs
         |> Array.map (fun (c, token, counts) -> 
             let tokenLikelihood = 
-                float (counts + 1) / float (totalCounts + vocabN)
+                float (counts + 1) / float (totalTokenCounts + vocabN)
             (c, token, tokenLikelihood)))
+
+let getClassLikelihoodsMap (tokenLikelihoods :  (Class * Token * Likelihood) []) 
+                           : Map<Class, Map<Token, Likelihood>> = 
+    tokenLikelihoods
     |> Array.groupBy (fun (c, _, _) -> c)
     |> Array.map (fun (c, xs) -> 
         c, 
@@ -391,6 +321,20 @@ let getTokenLikelihoods (labelledBows : LabelledBagOfWords [])
         |> Array.map (fun (_, token, counts) -> token, counts)
         |> Map)
     |> Map
+
+let getTokenLikelihoods (labelledBows : LabelledBagOfWords [])
+                        : Map<Class, Map<Token, Likelihood>> = 
+    
+    let classBagOfWords = 
+        getClassBagofWords labelledBows
+
+    let vocabN = 
+        classBagOfWords
+        |> Array.distinctBy (fun (_, token, _) -> token)
+        |> Array.length
+
+    computeTokenLikilihoods classBagOfWords vocabN
+    |> getClassLikelihoodsMap
 
 (**
 #### Building the Naive Bayes Classifier
@@ -400,7 +344,8 @@ type NbClassifierInfo =
     { Priors : Map<Class, Prior>
       Likelihoods : Map<Class, Map<Token, Likelihood>>}
 
-let buildNbClassifier (labelledBows : LabelledBagOfWords []) = 
+let trainNbClassifier (labelledBows : LabelledBagOfWords []) 
+                      : NbClassifierInfo = 
     { Priors = getPriors labelledBows
       Likelihoods = getTokenLikelihoods labelledBows}
 
@@ -408,22 +353,42 @@ let buildNbClassifier (labelledBows : LabelledBagOfWords []) =
 ## Classifying new Documents
 *)
 
-let classifyBagOfWords (nbClassifierInfo : NbClassifierInfo)
-                       (bow : BagOfWords)
-                       : Class =
+/// Fetch token scores from bag of words
+let getTokenScores 
+    (tokenLikelihoods : Map<Token, Likelihood>)
+    (bow : BagOfWords) 
+    : TokenScore [] = 
+    
+    bow
+    |> Array.choose (fun (token, count) -> 
+        match tokenLikelihoods.TryFind token with
+        | Some likelihood -> 
+            Some (log (likelihood ** float count))
+        | None -> None)
+
+/// Computes final score by adding token scores, prior
+let computeDocumentScore 
+    (prior : Prior)
+    (tokenScores : TokenScore []) 
+    : DocumentScore =
+    
+    tokenScores
+    |> Array.fold (+) (log prior)
+
+/// Computes document scores and classifies document
+let classifyBagOfWords 
+    (nbClassifierInfo : NbClassifierInfo)
+    (bow : BagOfWords)
+    : Class =
+    
     nbClassifierInfo.Priors
     |> Map.toArray
     |> Array.choose (fun (c, prior) -> 
         match nbClassifierInfo.Likelihoods.TryFind c with
         | Some tokenLikelihoods ->
             bow
-            |> Array.choose (fun (token, count) -> 
-                match tokenLikelihoods.TryFind token with
-                | Some likelihood -> 
-                    let tokenScore = log (likelihood ** float count)
-                    Some tokenScore
-                | None -> None)
-            |> Array.fold (+) (log prior)
+            |> getTokenScores tokenLikelihoods  
+            |> computeDocumentScore prior
             |> fun docScore -> Some (c, docScore)
         | None -> None)   
     |> Array.maxBy snd
@@ -433,25 +398,25 @@ let classifyBagOfWords (nbClassifierInfo : NbClassifierInfo)
 ### Evaluate
 *)
 
-let evaluate (nbClassifier : NbClassifier)
+let evaluate (nbClassifierInfo : NbClassifierInfo)
              (labelledBows : LabelledBagOfWords [])
              : Accuracy =
+    
+    let classifyBow = classifyBagOfWords nbClassifierInfo
    
     labelledBows
     |> PSeq.averageBy (fun (bow, label) ->  
-        if nbClassifier bow = label then 1. 
+        if classifyBow bow = label then 1. 
         else 0.)
 
 (**
 ### Model 1
 *)
 
-let tp1 = {NGram=1; MaxSampleTokens=10000}
-let trainBow, testBow = preprocessText tp1 imbdTrain imbdTest
+let tp1 = {NGram=2; MaxSampleTokens=5000}
+let trainBow, testBow = vectorizeTrainTest tp1 trainRaw testRaw
 
-let myNbClassifier : NbClassifier = 
-    buildNbClassifier trainBow
-    |> classifyBagOfWords
+let fittedClassifier = trainNbClassifier trainBow
 
-let trainEval = evaluate myNbClassifier trainBow
-let testEval = evaluate myNbClassifier testBow
+let trainEval = evaluate fittedClassifier trainBow
+let testEval = evaluate fittedClassifier testBow
