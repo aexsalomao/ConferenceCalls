@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>Introduction
+</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <meta name="author" content="">
+
+    <link rel="stylesheet" id="theme_link" href="https://cdnjs.cloudflare.com/ajax/libs/bootswatch/4.6.0/materia/bootstrap.min.css">
+    <script src="https://code.jquery.com/jquery-3.4.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.6.0/dist/js/bootstrap.bundle.min.js" integrity="sha384-Piv4xVNRyMGpqkS2by6br4gNJ7DXjqk09RmUpJ8jgGtD7zP9yug3goQfGII0yAns" crossorigin="anonymous"></script>
+
+    <script type="text/javascript" async src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-MML-AM_CHTML"></script>
+
+    <link rel="shortcut icon" type="image/x-icon" href="img/favicon.ico">
+    <link type="text/css" rel="stylesheet" href="/ConferenceCalls/content/navbar-fixed-left.css" />
+    <link type="text/css" rel="stylesheet" href="/ConferenceCalls/content/fsdocs-default.css" />
+    <link type="text/css" rel="stylesheet" href="/ConferenceCalls/content/fsdocs-custom.css" />
+    <script type="text/javascript" src="/ConferenceCalls/content/fsdocs-tips.js"></script>
+    <!-- HTML5 shim, for IE6-8 support of HTML5 elements -->
+    <!--[if lt IE 9]>
+      <script src="http://html5shim.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+    <!-- BEGIN SEARCH BOX: this adds support for the search box -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/JavaScript-autoComplete/1.0.4/auto-complete.css" />
+    <!-- END SEARCH BOX: this adds support for the search box -->
+    
+</head>
+
+<body>
+    <nav class="navbar navbar-expand-md navbar-light bg-secondary fixed-left" id="fsdocs-nav">
+        <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarsExampleDefault" aria-controls="navbarsExampleDefault" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse navbar-nav-scroll" id="navbarsExampleDefault">
+            <a href="/ConferenceCalls/"><img id="fsdocs-logo" src="/ConferenceCalls/img/logo.png" /></a>
+            <!-- BEGIN SEARCH BOX: this adds support for the search box -->
+            <div id="header">
+                <div class="searchbox" id="fsdocs-searchbox">
+                    <label for="search-by">
+                        <i class="fas fa-search"></i>
+                    </label>
+                    <input data-search-input="" id="search-by" type="search" placeholder="Search..." />
+                    <span data-search-clear="">
+                        <i class="fas fa-times"></i>
+                    </span>
+                </div>
+            </div>
+
+            <!-- END SEARCH BOX: this adds support for the search box -->
+            <ul class="navbar-nav">
+                <li class="nav-header">Links</li>
+                <li class="nav-item" id="fsdocs-license-link"><a class="nav-link" href="{{fsdocs-license-link}}">License</a></li>
+                <li class="nav-item" id="fsdocs-release-notes-link"><a class="nav-link" href="{{fsdocs-release-notes-link}}">Release Notes</a></li>
+                <li class="nav-item" id="fsdocs-repository-link"><a class="nav-link" href="{{fsdocs-repository-link}}">Source Repository</a></li>
+                <li class="nav-header">
+  Scripts
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/TranscriptParsing.html">
+    Parsing Motley Fool
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/EarningsAnnouncementReturn.html">
+    Earnings Announcement Return (EAR)
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/EarningsClassification.html">
+    Classifying Earnings Calls with Naive Bayes
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/TopicModelingDemo.html">
+    Predicting Returns with text data
+  </a>
+</li>             
+<li class="nav-header">
+  Other
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/Types.html">
+    Types
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/BugCheck.html">
+    Bug test
+
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/TextPreprocessing.html">
+    TextPreprocessing
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/optDemos.html">
+    optDemos
+  </a>
+</li>             
+<li class="nav-item">
+  <a class="nav-link" href="/ConferenceCalls/Common.html">
+    Common
+  </a>
+</li>
+                {{fsdocs-list-of-namespaces}}
+            </ul>
+        </div>
+    </nav>
+    <div class="container">
+        <div class="masthead">
+            <h3 class="muted"><a href="/ConferenceCalls/">ConferenceCalls</a></h3>
+        </div>
+        <hr />
+        <div class="container" id="fsdocs-content">
+            <h1><a name="Introduction" class="anchor" href="#Introduction">Introduction</a></h1>
+<p>The focus of this repository is to take you through a series of <em>text-mining</em> methods
+in Finance with an ultimate objective of conducting <em>sentiment analysis</em>.</p>
+<p>In particular, we'll be exploring these methods on a collection of earnings
+calls transcripts that were made available to us by <a href="https://www.fool.com">Motley Fool</a>,
+an online financial advisor. It is not known when the actual earnings announcements
+took place, but it is assumed that the calls occured either at the same time or
+right after the earnings announcements.</p>
+<p>Essentially, the objective of an earnings call is to provide investors with
+information regarding a company's past performance and future plans/projects,
+as well as answering questions from the media and related personnel. With
+company executives discussing pertinent matters related to the company's financial
+performace and general outlook. On a more technical note, earnings calls play a role
+in updating investors beliefs towards a given company, therefore allowing them to make
+better informed investment decisions. For this very reason, earnings calls
+are particularly valuable for investors when relevant prior non-public information is discussed/revealed.</p>
+<p>Example earnings call:</p>
+<img src="FsdocsImages\tesla_motley_fool.png" width="70%">
+<p>The field of text-mining is incredibly diverse and can be segmented into seven practice areas:</p>
+<p>1.	Search and information retrieval</p>
+<p>2.	Document clustering</p>
+<p>3.	Document classification</p>
+<p>4.	Web mining</p>
+<p>5.	Information extraction</p>
+<p>6.	Natural Language Processing (NLP)</p>
+<p>7.	Concept extraction</p>
+<p>While all seven practice areas are very much in use in differing areas within
+economics and finance, a significant amount of research today is focused on
+document classification, information retrieval and NLP.</p>
+<p><em>Sentiment analysis</em> is considered to fall under the umbrella of
+document classification. In a nutshell, it seeks to determine general sentiments,
+opinions, and affective states of people reflected in a corpus of text.</p>
+<p>Some well-known classification algorithms:</p>
+<ul>
+<li>Naive Bayes</li>
+<li>Logistic Regression</li>
+<li>Decision trees</li>
+<li>Neural Network</li>
+</ul>
+
+            
+        </div>
+
+        <!-- BEGIN SEARCH BOX: this adds support for the search box -->
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/JavaScript-autoComplete/1.0.4/auto-complete.css" />
+        <script type="text/javascript">var fsdocs_search_baseurl = '/ConferenceCalls/';</script>
+        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/lunr.js/2.3.8/lunr.min.js"></script>
+        <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/JavaScript-autoComplete/1.0.4/auto-complete.min.js"></script>
+        <script type="text/javascript" src="/ConferenceCalls/content/fsdocs-search.js"></script>
+        <!-- END SEARCH BOX: this adds support for the search box -->
+    </div>
+</body>
+
+</html>
+
