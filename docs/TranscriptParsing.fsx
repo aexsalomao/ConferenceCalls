@@ -5,6 +5,10 @@ category: Scripts
 categoryindex: 2
 index: 1
 ---
+
+[![Script](img/badge-script.svg)]({{root}}/{{fsdocs-source-basename}}.fsx)&emsp;
+[![Notebook](img/badge-notebook.svg)]({{root}}/{{fsdocs-source-basename}}.ipynb)
+
 *)
 
 (**
